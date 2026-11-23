@@ -1,6 +1,6 @@
 # Estado
 
-Prueba técnica: en curso.
+Prueba técnica: Hecho.
 
 ## Paso 1 — Esqueleto y deploy (`spike/esqueleto`)
 
