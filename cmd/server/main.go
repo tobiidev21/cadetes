@@ -17,6 +17,8 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/tobiidev21/cadetes/db/migrations"
+	"github.com/tobiidev21/cadetes/internal/auth"
+	"github.com/tobiidev21/cadetes/internal/db"
 	"github.com/tobiidev21/cadetes/web"
 )
 
@@ -54,9 +56,18 @@ func run() error {
 		return err
 	}
 
+	authSvc := auth.NewService(db.New(pool))
+	created, err := authSvc.EnsureInitialAdmin(ctx, os.Getenv("ADMIN_INITIAL_PASSWORD"))
+	if err != nil {
+		return fmt.Errorf("admin inicial: %w", err)
+	}
+	if created {
+		slog.Info("admin inicial creado", "usuario", auth.InitialAdminUsername)
+	}
+
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           routes(pool),
+		Handler:           routes(pool, auth.NewHandler(authSvc)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -126,7 +137,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func routes(pool *pgxpool.Pool) http.Handler {
+func routes(pool *pgxpool.Pool, authH *auth.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +154,17 @@ func routes(pool *pgxpool.Pool) http.Handler {
 		fmt.Fprint(w, "ok")
 	})
 
+	admin := authH.RequireRole(auth.RoleAdmin)
+
+	mux.HandleFunc("POST /api/login", authH.Login)
+	mux.HandleFunc("POST /api/logout", authH.Logout)
+	mux.Handle("GET /api/sesion", authH.RequireLogin(http.HandlerFunc(authH.Session)))
+	mux.Handle("GET /api/usuarios", admin(http.HandlerFunc(authH.ListUsers)))
+	mux.Handle("POST /api/usuarios", admin(http.HandlerFunc(authH.CreateUser)))
+
 	mux.Handle("GET /", http.FileServerFS(web.FS()))
 
-	return mux
+	// Rechaza POST/PUT/DELETE que vienen de otro origen (CSRF), además de
+	// SameSite=Lax en la cookie.
+	return http.NewCrossOriginProtection().Handler(mux)
 }
