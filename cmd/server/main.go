@@ -20,6 +20,7 @@ import (
 	"github.com/tobiidev21/cadetes/internal/auth"
 	"github.com/tobiidev21/cadetes/internal/db"
 	"github.com/tobiidev21/cadetes/internal/orders"
+	"github.com/tobiidev21/cadetes/internal/push"
 	"github.com/tobiidev21/cadetes/web"
 )
 
@@ -40,6 +41,13 @@ func run() error {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return errors.New("falta la variable DATABASE_URL")
+	}
+
+	// Se valida antes de tocar la base: si faltan las claves VAPID la app no
+	// arranca, en vez de arrancar y no mandar ningún push.
+	pushCfg, err := push.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		return err
 	}
 
 	port := os.Getenv("PORT")
@@ -67,9 +75,12 @@ func run() error {
 		slog.Info("admin inicial creado", "usuario", auth.InitialAdminUsername)
 	}
 
+	pushSvc := push.NewService(queries, push.NewWebPushSender(pushCfg, nil), pushCfg.PublicKey)
+	ordersSvc := orders.NewService(queries, pushSvc)
+
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           routes(pool, auth.NewHandler(authSvc), orders.NewHandler(orders.NewService(queries))),
+		Handler:           routes(pool, auth.NewHandler(authSvc), orders.NewHandler(ordersSvc), push.NewHandler(pushSvc)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -94,7 +105,12 @@ func run() error {
 	slog.Info("apagando el servidor")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	// Con el servidor cerrado no entran pedidos nuevos; se esperan los push
+	// que estaban saliendo.
+	return pushSvc.Shutdown(shutdownCtx)
 }
 
 // connect abre el pool de pgx y verifica que la base responda.
@@ -139,7 +155,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler) http.Handler {
+func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pushH *push.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -166,8 +182,22 @@ func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler) ht
 	mux.Handle("GET /api/cadetes", admin(http.HandlerFunc(ordersH.ListCouriers)))
 	mux.Handle("GET /api/pedidos", authH.RequireLogin(http.HandlerFunc(ordersH.List)))
 	mux.Handle("POST /api/pedidos", admin(http.HandlerFunc(ordersH.Create)))
+	mux.Handle("GET /api/pedidos/{id}", authH.RequireLogin(http.HandlerFunc(ordersH.Get)))
+	mux.Handle("GET /api/push/clave", authH.RequireLogin(http.HandlerFunc(pushH.PublicKey)))
+	mux.Handle("POST /api/push/suscripciones", authH.RequireRole(auth.RoleCadete)(http.HandlerFunc(pushH.Subscribe)))
 
-	mux.Handle("GET /", http.FileServerFS(web.FS()))
+	// La notificación abre /pedidos/{id}: es la misma página, que lee la ruta.
+	mux.HandleFunc("GET /pedidos/{id}", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, web.FS(), "index.html")
+	})
+	static := http.FileServerFS(web.FS())
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sw.js" {
+			// Que el navegador vea enseguida una versión nueva del service worker.
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		static.ServeHTTP(w, r)
+	})
 
 	// Rechaza POST/PUT/DELETE que vienen de otro origen (CSRF), además de
 	// SameSite=Lax en la cookie.

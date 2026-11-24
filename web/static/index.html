@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cadetes</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#1d4ed8">
+  <meta name="apple-mobile-web-app-title" content="Cadetes">
 </head>
 <body>
   <h1>Cadetes</h1>
@@ -18,6 +23,19 @@
   <div id="sesion" hidden>
     <p>Entraste como <strong id="nombre"></strong> (<span id="rol"></span>).</p>
     <p><button id="salir" type="button">Salir</button></p>
+  </div>
+
+  <div id="notificaciones" hidden>
+    <h2>Notificaciones</h2>
+    <p id="estado-notif" role="status"></p>
+    <p><button id="activar-notif" type="button" hidden>Activar notificaciones</button></p>
+  </div>
+
+  <div id="detalle" hidden>
+    <h2 id="titulo-detalle">Pedido</h2>
+    <p id="error-detalle" role="alert"></p>
+    <dl id="datos-detalle"></dl>
+    <p><a href="/">Ver todos los pedidos</a></p>
   </div>
 
   <div id="admin" hidden>
@@ -75,6 +93,18 @@
 
     let usuarioActual = null;
 
+    // /pedidos/{id} es la misma página: muestra además el detalle de ese pedido.
+    const rutaPedido = /^\/pedidos\/(\d+)\/?$/.exec(location.pathname);
+
+    // El service worker se registra siempre (no pide nada al usuario); el
+    // permiso de notificaciones se pide solo con el botón.
+    const registroSW = 'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('/sw.js').catch((err) => {
+          console.warn('No se pudo registrar el service worker', err);
+          return null;
+        })
+      : Promise.resolve(null);
+
     const pesos = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' });
     const fecha = new Intl.DateTimeFormat('es-AR', {
       dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires',
@@ -96,7 +126,12 @@
       sesion.hidden = !usuario;
       pedidos.hidden = !usuario;
       const esAdmin = !!usuario && usuario.role === 'admin';
+      const esCadete = !!usuario && usuario.role === 'cadete';
       admin.hidden = !esAdmin;
+      document.getElementById('notificaciones').hidden = !esCadete;
+      document.getElementById('detalle').hidden = !usuario || !rutaPedido;
+      if (esCadete) prepararNotificaciones();
+      if (usuario && rutaPedido) cargarDetalle();
       if (usuario) {
         document.getElementById('nombre').textContent = usuario.name;
         document.getElementById('rol').textContent = usuario.role;
@@ -105,6 +140,8 @@
       } else {
         document.getElementById('filas-pedidos').replaceChildren();
         document.getElementById('error-pedidos').textContent = '';
+        document.getElementById('datos-detalle').replaceChildren();
+        document.getElementById('error-detalle').textContent = '';
       }
       if (esAdmin) {
         cargarUsuarios();
@@ -183,9 +220,16 @@
           pesos.format(p.price_cents / 100), p.status,
         ];
         if (esAdmin) valores.push(p.courier_name || '—');
-        for (const valor of valores) {
+        for (const [i, valor] of valores.entries()) {
           const td = document.createElement('td');
-          td.textContent = valor;
+          if (i === 0) {
+            const a = document.createElement('a');
+            a.href = `/pedidos/${p.id}`;
+            a.textContent = valor;
+            td.append(a);
+          } else {
+            td.textContent = valor;
+          }
           tr.append(td);
         }
         return tr;
@@ -193,6 +237,134 @@
       document.getElementById('filas-pedidos').replaceChildren(...filas);
       document.getElementById('sin-pedidos').hidden = cuerpo.length > 0;
     }
+
+    async function cargarDetalle() {
+      const id = rutaPedido[1];
+      const errorDetalle = document.getElementById('error-detalle');
+      const datos = document.getElementById('datos-detalle');
+      document.getElementById('titulo-detalle').textContent = `Pedido N° ${id}`;
+      errorDetalle.textContent = '';
+      datos.replaceChildren();
+      const res = await fetch(`/api/pedidos/${id}`);
+      const p = await res.json().catch(() => null);
+      if (!res.ok) {
+        errorDetalle.textContent = res.status === 404
+          ? 'No encontramos ese pedido o no está asignado a vos.'
+          : (p && p.error) || 'No se pudo cargar el pedido';
+        return;
+      }
+      const campos = [
+        ['Estado', p.status],
+        ['Retiro', p.pickup_address],
+        ['Entrega', p.dropoff_address],
+        ['Precio', pesos.format(p.price_cents / 100)],
+        ['Cadete', p.courier_name || '—'],
+        ['Creado', fecha.format(new Date(p.created_at))],
+      ];
+      for (const [nombre, valor] of campos) {
+        const dt = document.createElement('dt');
+        dt.textContent = nombre;
+        const dd = document.createElement('dd');
+        dd.textContent = valor;
+        datos.append(dt, dd);
+      }
+    }
+
+    // --- Notificaciones push (solo cadetes) ---
+
+    const estadoNotif = document.getElementById('estado-notif');
+    const botonNotif = document.getElementById('activar-notif');
+    let clavePush = null;
+
+    function base64urlABytes(texto) {
+      const b64 = texto.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(texto.length / 4) * 4, '=');
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+
+    function mismaClave(sub, clave) {
+      const actual = sub.options && sub.options.applicationServerKey;
+      if (!actual) return false;
+      const a = new Uint8Array(actual);
+      const b = base64urlABytes(clave);
+      return a.length === b.length && a.every((x, i) => x === b[i]);
+    }
+
+    async function guardarSuscripcion(sub) {
+      const res = await fetch('/api/push/suscripciones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      if (!res.ok) {
+        const cuerpo = await res.json().catch(() => ({}));
+        throw new Error(cuerpo.error || `el servidor respondió ${res.status}`);
+      }
+    }
+
+    async function prepararNotificaciones() {
+      botonNotif.hidden = true;
+      const soporta = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+      if (!soporta) {
+        const esIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+        estadoNotif.textContent = esIOS
+          ? 'En iPhone: tocá Compartir → "Agregar a inicio" y abrí la app desde ese ícono para poder activar las notificaciones.'
+          : 'Este navegador no soporta notificaciones push.';
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        estadoNotif.textContent = 'Las notificaciones están bloqueadas para esta app. Habilitalas desde la configuración del navegador o del teléfono.';
+        return;
+      }
+      estadoNotif.textContent = 'Preparando…';
+      try {
+        const [res, registro] = await Promise.all([fetch('/api/push/clave'), registroSW]);
+        if (!res.ok || !registro) throw new Error('no se pudo preparar el servicio de notificaciones');
+        clavePush = (await res.json()).public_key;
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub && Notification.permission === 'granted') {
+          if (mismaClave(sub, clavePush)) {
+            // Se reenvía siempre: cubre que el servidor la haya borrado o que
+            // en este teléfono haya entrado otro cadete.
+            await guardarSuscripcion(sub);
+            estadoNotif.textContent = 'Notificaciones activadas en este dispositivo.';
+            return;
+          }
+          await sub.unsubscribe(); // cambiaron las claves VAPID: hay que suscribirse de nuevo
+        }
+        estadoNotif.textContent = 'Activá las notificaciones para enterarte de los pedidos nuevos.';
+        botonNotif.hidden = false;
+      } catch (err) {
+        estadoNotif.textContent = `No se pudieron preparar las notificaciones: ${err.message}`;
+      }
+    }
+
+    botonNotif.addEventListener('click', async () => {
+      botonNotif.disabled = true;
+      try {
+        // Primero el permiso, directo desde el toque (iPhone lo exige).
+        const permiso = await Notification.requestPermission();
+        if (permiso !== 'granted') {
+          estadoNotif.textContent = permiso === 'denied'
+            ? 'Bloqueaste las notificaciones. Habilitalas desde la configuración del navegador o del teléfono.'
+            : 'No se activaron las notificaciones.';
+          botonNotif.hidden = permiso === 'denied';
+          return;
+        }
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: base64urlABytes(clavePush),
+        });
+        await guardarSuscripcion(sub);
+        estadoNotif.textContent = 'Notificaciones activadas en este dispositivo.';
+        botonNotif.hidden = true;
+      } catch (err) {
+        estadoNotif.textContent = `No se pudieron activar las notificaciones: ${err.message}`;
+      } finally {
+        botonNotif.disabled = false;
+      }
+    });
 
     nuevoPedido.addEventListener('submit', async (e) => {
       e.preventDefault();

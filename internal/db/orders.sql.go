@@ -55,6 +55,81 @@ func (q *Queries) CreateAssignedOrder(ctx context.Context, arg CreateAssignedOrd
 	return i, err
 }
 
+const getOrder = `-- name: GetOrder :one
+SELECT o.id, o.pickup_address, o.dropoff_address, o.price_cents, o.status,
+       o.courier_id, c.name AS courier_name, o.created_at
+FROM orders o
+LEFT JOIN users c ON c.id = o.courier_id
+WHERE o.id = $1::bigint
+`
+
+type GetOrderRow struct {
+	ID             int64
+	PickupAddress  string
+	DropoffAddress string
+	PriceCents     int64
+	Status         string
+	CourierID      *int64
+	CourierName    *string
+	CreatedAt      time.Time
+}
+
+func (q *Queries) GetOrder(ctx context.Context, id int64) (GetOrderRow, error) {
+	row := q.db.QueryRow(ctx, getOrder, id)
+	var i GetOrderRow
+	err := row.Scan(
+		&i.ID,
+		&i.PickupAddress,
+		&i.DropoffAddress,
+		&i.PriceCents,
+		&i.Status,
+		&i.CourierID,
+		&i.CourierName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getOrderForCourier = `-- name: GetOrderForCourier :one
+SELECT o.id, o.pickup_address, o.dropoff_address, o.price_cents, o.status,
+       o.courier_id, c.name AS courier_name, o.created_at
+FROM orders o
+LEFT JOIN users c ON c.id = o.courier_id
+WHERE o.id = $1::bigint AND o.courier_id = $2::bigint
+`
+
+type GetOrderForCourierParams struct {
+	ID        int64
+	CourierID int64
+}
+
+type GetOrderForCourierRow struct {
+	ID             int64
+	PickupAddress  string
+	DropoffAddress string
+	PriceCents     int64
+	Status         string
+	CourierID      *int64
+	CourierName    *string
+	CreatedAt      time.Time
+}
+
+func (q *Queries) GetOrderForCourier(ctx context.Context, arg GetOrderForCourierParams) (GetOrderForCourierRow, error) {
+	row := q.db.QueryRow(ctx, getOrderForCourier, arg.ID, arg.CourierID)
+	var i GetOrderForCourierRow
+	err := row.Scan(
+		&i.ID,
+		&i.PickupAddress,
+		&i.DropoffAddress,
+		&i.PriceCents,
+		&i.Status,
+		&i.CourierID,
+		&i.CourierName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listOrders = `-- name: ListOrders :many
 SELECT o.id, o.pickup_address, o.dropoff_address, o.price_cents, o.status,
        o.courier_id, c.name AS courier_name, o.created_at

@@ -19,6 +19,16 @@ type Order struct {
 	CreatedAt      time.Time
 }
 
+type PushSubscription struct {
+	ID        int64
+	UserID    int64
+	Endpoint  string
+	P256dh    string
+	Auth      string
+	UserAgent string
+	CreatedAt time.Time
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    int64

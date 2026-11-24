@@ -26,3 +26,17 @@ FROM orders o
 LEFT JOIN users c ON c.id = o.courier_id
 WHERE o.courier_id = sqlc.arg(courier_id)::bigint
 ORDER BY o.created_at DESC, o.id DESC;
+
+-- name: GetOrder :one
+SELECT o.id, o.pickup_address, o.dropoff_address, o.price_cents, o.status,
+       o.courier_id, c.name AS courier_name, o.created_at
+FROM orders o
+LEFT JOIN users c ON c.id = o.courier_id
+WHERE o.id = sqlc.arg(id)::bigint;
+
+-- name: GetOrderForCourier :one
+SELECT o.id, o.pickup_address, o.dropoff_address, o.price_cents, o.status,
+       o.courier_id, c.name AS courier_name, o.created_at
+FROM orders o
+LEFT JOIN users c ON c.id = o.courier_id
+WHERE o.id = sqlc.arg(id)::bigint AND o.courier_id = sqlc.arg(courier_id)::bigint;
