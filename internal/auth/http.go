@@ -36,6 +36,12 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return u, ok
 }
 
+// ContextWithUser deja el usuario en el contexto, como lo hace el middleware.
+// Sirve para tests de otros paquetes.
+func ContextWithUser(ctx context.Context, u User) context.Context {
+	return context.WithValue(ctx, ctxKey{}, u)
+}
+
 // RequireLogin deja pasar a cualquier usuario con sesión válida (401 si no).
 func (h *Handler) RequireLogin(next http.Handler) http.Handler {
 	return h.require(next, nil)
@@ -71,7 +77,7 @@ func (h *Handler) require(next http.Handler, roles []Role) http.Handler {
 			writeError(w, http.StatusForbidden, "No tenés permiso para esto")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, u)))
+		next.ServeHTTP(w, r.WithContext(ContextWithUser(r.Context(), u)))
 	})
 }
 

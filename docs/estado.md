@@ -1,6 +1,6 @@
 # Estado
 
-Prueba técnica: en curso. Paso 1 hecho; paso 2 en revisión.
+Prueba técnica: en curso. Pasos 1 y 2 hechos; paso 3 en revisión.
 
 ## Paso 1 — Esqueleto y deploy (`spike/esqueleto`)
 
@@ -102,3 +102,65 @@ Pantalla, en Chrome headless manejado por DevTools Protocol contra la imagen y u
 ### Fuera de este paso
 
 Sin límite de intentos de login, sin cambio de contraseña ni baja de usuarios desde la API: no los pide la prueba.
+
+## Paso 3 — Pedidos (`spike/pedidos`)
+
+### Qué se hizo
+
+- `db/migrations/00003_pedidos.sql`: tabla `orders` según el modelo del plan.
+  - `price_cents BIGINT` con `CHECK (> 0)`: plata en centavos, siempre entero.
+  - `status` con `CHECK` (`pendiente`, `asignado`, `entregado`) y otro `CHECK` que ata estado y cadete: `pendiente` ⇔ sin `courier_id`.
+  - Direcciones no vacías (`CHECK`). `courier_id` y `created_by` con FK a `users`. Índices por cadete y por fecha.
+- Consultas (`db/queries/orders.sql` y `ListActiveCouriers` en `users.sql`). En `sqlc.yaml` se activó `emit_pointers_for_null_types`: las columnas que aceptan `NULL` salen como `*int64`/`*string` en vez de `pgtype` (no cambia nada de lo anterior, que no tenía columnas nulas).
+  - `CreateAssignedOrder` es un `INSERT … SELECT … FROM users WHERE id = $cadete AND role = 'cadete' AND active`: si el elegido no es un cadete activo no inserta nada. El control y el alta van en la misma sentencia, sin carrera entre "verificar" y "crear".
+  - El cadete lista con una consulta propia (`ListOrdersByCourier`, filtrada por su id); no hay un filtro opcional que se pueda olvidar.
+- `internal/orders`: servicio + handlers HTTP.
+  - Validación: direcciones recortadas, no vacías y hasta 200 caracteres; precio > 0; cadete obligatorio. Los errores se devuelven en castellano y se muestran tal cual.
+  - El pedido se crea ya `asignado` (el paso pide crearlo y asignarlo; no hay reasignación ni cambio de estado todavía).
+- `internal/auth`: se agregó `ContextWithUser`, que ahora usa el middleware y sirve para testear handlers de otros paquetes.
+- Rutas nuevas:
+  - `GET /api/cadetes` (solo admin) → cadetes activos `{id, username, name}`, ordenados por nombre. Es lo que llena la lista para elegir.
+  - `POST /api/pedidos` (solo admin) `{"pickup_address","dropoff_address","price_cents","courier_id"}` → 201 con el pedido. `price_cents` tiene que ser un entero JSON: `1500.5` o `"1500"` dan 400.
+  - `GET /api/pedidos` (cualquier usuario logueado) → el admin ve todos; el cadete, solo los suyos. Más nuevos primero.
+- `web/static/index.html` (sin diseño):
+  - Admin: formulario "Nuevo pedido" con retiro, entrega, precio en pesos y un `<select>` con los cadetes activos ("Nombre (usuario)"). Si no hay ninguno, la lista lo dice y el botón queda deshabilitado. Al dar de alta un cadete, la lista se recarga sola.
+  - El precio se escribe en pesos (`1500`, `1500,50` o `1500.50`) y se pasa a centavos con un parseo de texto, sin punto flotante. `1.500` se rechaza (sin separador de miles) para no confundirlo con 1,5.
+  - Tabla de pedidos para los dos roles (el cadete la ve como "Mis pedidos", sin la columna Cadete), con botón "Actualizar". Precio con formato `$ 1.500,50`, fecha en hora de Argentina.
+
+### Cómo se probó
+
+Tests (`go test -race ./...`; `internal/orders` con un store en memoria que imita el `INSERT … SELECT`):
+
+- Crear: queda `asignado` al cadete elegido, direcciones recortadas, `created_by` = el admin.
+- Validaciones: sin retiro/entrega, solo espacios, 201 caracteres (200 con `ñ` pasa), precio 0 o negativo, sin cadete → error de dato, sin crear nada.
+- Cadete inexistente, inactivo o que es admin → `ErrInvalidCourier`, sin crear nada.
+- Listado: el cadete ve solo los suyos (más nuevo primero), el admin todos, un cadete sin pedidos recibe `[]` y no `null`.
+- Cadetes activos: sin admin ni inactivos, ordenados por nombre.
+- HTTP: 201 al crear; 400 con precio decimal, precio como texto, campo desconocido (p. ej. `status`), cadete inactivo o sin precio; 401 sin usuario; 500 sin detalles si falla la base.
+
+De punta a punta, imagen Docker contra Postgres 18 descartable, con curl:
+
+- Arranque: aplica la migración 3 (`base al día version=3`).
+- Admin crea `juan`, `ana` y `pedro`; se desactiva `pedro` en la base. `GET /api/cadetes` → solo Ana y Juan.
+- Pedido a Juan y a Ana → 201. A Pedro (inactivo), al admin o a un id inexistente → 400 "El cadete elegido no existe o no está activo".
+- Precio `10.5` → 400; precio 0 → 400; dirección con solo espacios → 400.
+- Admin lista los dos; **Juan lista solo el suyo**.
+- Juan en `POST /api/pedidos` y en `GET /api/cadetes` → 403. Sin sesión → 401. POST con `Sec-Fetch-Site: cross-site` → 403.
+- En la base: `price_cents` guardado como entero (150050, 90000). Un `INSERT` a mano `asignado` sin cadete, o `pendiente` con cadete, lo rechaza el `CHECK`.
+
+Pantalla, en Chrome headless manejado por DevTools Protocol, admin y cadete en contextos aislados (el cadete con viewport de celular de 390 px):
+
+- La lista de cadetes muestra "Elegí un cadete", Ana y Juan (no Pedro). Sin elegir, el formulario no se envía.
+- Precios `1.500`, `abc` y `0` → "Precio inválido…", sin crear nada.
+- Admin crea un pedido de `1500,50` a Juan → "Pedido N creado y asignado.", aparece primero con `$ 1.500,50`, Juan y `asignado`; el formulario se vacía. `2000.5` a Ana → `$ 2.000,50`.
+- **Juan no lo ve hasta recargar; al recargar aparece primero**, y no ve el pedido de Ana. Sin scroll horizontal a 390 px.
+- Alta del cadete Zoe desde la pantalla → aparece en la lista sin recargar.
+- Al salir, la tabla de pedidos se oculta y se vacía.
+
+### Antes de mergear
+
+- [ ] Probar en el dominio de Railway: el admin crea un pedido desde la compu eligiendo un cadete, y aparece en el celular del cadete al recargar.
+
+### Fuera de este paso
+
+Sin pedidos `pendiente` (sin cadete), reasignación, marcar como entregado ni vista de detalle `/pedidos/{id}` (llega con el push en el paso 4). Los listados no tienen paginación: alcanza para la prueba.

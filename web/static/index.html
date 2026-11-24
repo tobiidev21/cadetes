@@ -21,6 +21,16 @@
   </div>
 
   <div id="admin" hidden>
+    <h2>Nuevo pedido</h2>
+    <form id="nuevo-pedido">
+      <p><label>Dirección de retiro<br><input name="pickup_address" autocomplete="off" maxlength="200" required></label></p>
+      <p><label>Dirección de entrega<br><input name="dropoff_address" autocomplete="off" maxlength="200" required></label></p>
+      <p><label>Precio en pesos (ej.: 1500 o 1500,50)<br><input name="precio" inputmode="decimal" autocomplete="off" required></label></p>
+      <p><label>Cadete<br><select name="courier_id" id="cadetes" required></select></label></p>
+      <p><button type="submit" id="crear-pedido">Crear pedido</button></p>
+      <p id="resultado-pedido" role="status"></p>
+    </form>
+
     <h2>Nuevo cadete</h2>
     <form id="nuevo-cadete">
       <p><label>Usuario<br><input name="username" autocomplete="off" autocapitalize="none" required></label></p>
@@ -40,6 +50,17 @@
     </table>
   </div>
 
+  <div id="pedidos" hidden>
+    <h2 id="titulo-pedidos">Pedidos</h2>
+    <p><button id="actualizar-pedidos" type="button">Actualizar</button></p>
+    <p id="error-pedidos" role="alert"></p>
+    <p id="sin-pedidos" hidden>No hay pedidos.</p>
+    <table>
+      <thead><tr id="columnas-pedidos"></tr></thead>
+      <tbody id="filas-pedidos"></tbody>
+    </table>
+  </div>
+
   <script>
     const form = document.getElementById('login');
     const sesion = document.getElementById('sesion');
@@ -47,21 +68,52 @@
     const admin = document.getElementById('admin');
     const nuevoCadete = document.getElementById('nuevo-cadete');
     const resultadoCadete = document.getElementById('resultado-cadete');
+    const nuevoPedido = document.getElementById('nuevo-pedido');
+    const resultadoPedido = document.getElementById('resultado-pedido');
+    const selectCadetes = document.getElementById('cadetes');
+    const pedidos = document.getElementById('pedidos');
+
+    let usuarioActual = null;
+
+    const pesos = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' });
+    const fecha = new Intl.DateTimeFormat('es-AR', {
+      dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires',
+    });
+
+    // "1500" o "1500,50" (también con punto) → centavos, sin pasar por
+    // decimales de punto flotante. Sin separador de miles: "1.500" es inválido
+    // para no confundirlo con 1,5.
+    function pesosACentavos(texto) {
+      const m = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(texto.trim());
+      if (!m) return null;
+      const centavos = Number(m[1]) * 100 + Number((m[2] || '').padEnd(2, '0'));
+      return Number.isSafeInteger(centavos) && centavos > 0 ? centavos : null;
+    }
 
     function mostrar(usuario) {
+      usuarioActual = usuario;
       form.hidden = !!usuario;
       sesion.hidden = !usuario;
+      pedidos.hidden = !usuario;
       const esAdmin = !!usuario && usuario.role === 'admin';
       admin.hidden = !esAdmin;
       if (usuario) {
         document.getElementById('nombre').textContent = usuario.name;
         document.getElementById('rol').textContent = usuario.role;
+        document.getElementById('titulo-pedidos').textContent = esAdmin ? 'Pedidos' : 'Mis pedidos';
+        cargarPedidos();
+      } else {
+        document.getElementById('filas-pedidos').replaceChildren();
+        document.getElementById('error-pedidos').textContent = '';
       }
       if (esAdmin) {
         cargarUsuarios();
+        cargarCadetes();
       } else {
         document.getElementById('usuarios').replaceChildren();
+        selectCadetes.replaceChildren();
         resultadoCadete.textContent = '';
+        resultadoPedido.textContent = '';
       }
     }
 
@@ -86,6 +138,92 @@
       document.getElementById('usuarios').replaceChildren(...filas);
     }
 
+    async function cargarCadetes() {
+      const elegido = selectCadetes.value;
+      const res = await fetch('/api/cadetes');
+      const cuerpo = await res.json().catch(() => null);
+      const botonCrear = document.getElementById('crear-pedido');
+      if (!res.ok) {
+        selectCadetes.replaceChildren(new Option('No se pudieron cargar los cadetes', ''));
+        botonCrear.disabled = true;
+        return;
+      }
+      if (cuerpo.length === 0) {
+        selectCadetes.replaceChildren(new Option('No hay cadetes activos', ''));
+        botonCrear.disabled = true;
+        return;
+      }
+      const opciones = cuerpo.map((c) => new Option(`${c.name} (${c.username})`, String(c.id)));
+      selectCadetes.replaceChildren(new Option('Elegí un cadete', ''), ...opciones);
+      if (cuerpo.some((c) => String(c.id) === elegido)) selectCadetes.value = elegido;
+      botonCrear.disabled = false;
+    }
+
+    async function cargarPedidos() {
+      const errorPedidos = document.getElementById('error-pedidos');
+      errorPedidos.textContent = '';
+      const res = await fetch('/api/pedidos');
+      const cuerpo = await res.json().catch(() => null);
+      if (!res.ok) {
+        errorPedidos.textContent = (cuerpo && cuerpo.error) || 'No se pudieron cargar los pedidos';
+        return;
+      }
+      const esAdmin = usuarioActual && usuarioActual.role === 'admin';
+      const columnas = ['N°', 'Fecha', 'Retiro', 'Entrega', 'Precio', 'Estado'];
+      if (esAdmin) columnas.push('Cadete');
+      document.getElementById('columnas-pedidos').replaceChildren(...columnas.map((c) => {
+        const th = document.createElement('th');
+        th.textContent = c;
+        return th;
+      }));
+      const filas = cuerpo.map((p) => {
+        const tr = document.createElement('tr');
+        const valores = [
+          p.id, fecha.format(new Date(p.created_at)), p.pickup_address, p.dropoff_address,
+          pesos.format(p.price_cents / 100), p.status,
+        ];
+        if (esAdmin) valores.push(p.courier_name || '—');
+        for (const valor of valores) {
+          const td = document.createElement('td');
+          td.textContent = valor;
+          tr.append(td);
+        }
+        return tr;
+      });
+      document.getElementById('filas-pedidos').replaceChildren(...filas);
+      document.getElementById('sin-pedidos').hidden = cuerpo.length > 0;
+    }
+
+    nuevoPedido.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      resultadoPedido.textContent = '';
+      const datos = Object.fromEntries(new FormData(nuevoPedido));
+      const centavos = pesosACentavos(datos.precio);
+      if (centavos === null) {
+        resultadoPedido.textContent = 'Precio inválido: solo números, con hasta dos decimales y sin separador de miles (ej.: 1500 o 1500,50).';
+        return;
+      }
+      const res = await fetch('/api/pedidos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickup_address: datos.pickup_address,
+          dropoff_address: datos.dropoff_address,
+          price_cents: centavos,
+          courier_id: Number(datos.courier_id),
+        }),
+      });
+      const cuerpo = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        resultadoPedido.textContent = cuerpo.error || 'No se pudo crear el pedido';
+        cargarCadetes(); // por si el cadete elegido se dio de baja
+        return;
+      }
+      nuevoPedido.reset();
+      resultadoPedido.textContent = `Pedido ${cuerpo.id} creado y asignado.`;
+      cargarPedidos();
+    });
+
     nuevoCadete.addEventListener('submit', async (e) => {
       e.preventDefault();
       resultadoCadete.textContent = '';
@@ -103,7 +241,10 @@
       nuevoCadete.reset();
       resultadoCadete.textContent = `Cadete ${cuerpo.username} creado.`;
       cargarUsuarios();
+      cargarCadetes();
     });
+
+    document.getElementById('actualizar-pedidos').addEventListener('click', cargarPedidos);
 
     async function cargarSesion() {
       const res = await fetch('/api/sesion');

@@ -13,3 +13,9 @@ SELECT * FROM users WHERE username = $1;
 SELECT id, username, role, name, active, created_at
 FROM users
 ORDER BY role, name, id;
+
+-- name: ListActiveCouriers :many
+SELECT id, username, name
+FROM users
+WHERE role = 'cadete' AND active
+ORDER BY name, id;

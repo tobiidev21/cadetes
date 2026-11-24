@@ -81,6 +81,39 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	return i, err
 }
 
+const listActiveCouriers = `-- name: ListActiveCouriers :many
+SELECT id, username, name
+FROM users
+WHERE role = 'cadete' AND active
+ORDER BY name, id
+`
+
+type ListActiveCouriersRow struct {
+	ID       int64
+	Username string
+	Name     string
+}
+
+func (q *Queries) ListActiveCouriers(ctx context.Context) ([]ListActiveCouriersRow, error) {
+	rows, err := q.db.Query(ctx, listActiveCouriers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveCouriersRow{}
+	for rows.Next() {
+		var i ListActiveCouriersRow
+		if err := rows.Scan(&i.ID, &i.Username, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
 SELECT id, username, role, name, active, created_at
 FROM users
