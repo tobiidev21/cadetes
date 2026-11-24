@@ -7,6 +7,62 @@
 </head>
 <body>
   <h1>Cadetes</h1>
-  <p>Prueba técnica: deploy automático ok</p>
+
+  <form id="login" hidden>
+    <p><label>Usuario<br><input name="username" autocomplete="username" autocapitalize="none" required></label></p>
+    <p><label>Contraseña<br><input name="password" type="password" autocomplete="current-password" required></label></p>
+    <p><button type="submit">Entrar</button></p>
+    <p id="error" role="alert"></p>
+  </form>
+
+  <div id="sesion" hidden>
+    <p>Entraste como <strong id="nombre"></strong> (<span id="rol"></span>).</p>
+    <p><button id="salir" type="button">Salir</button></p>
+  </div>
+
+  <script>
+    const form = document.getElementById('login');
+    const sesion = document.getElementById('sesion');
+    const error = document.getElementById('error');
+
+    function mostrar(usuario) {
+      form.hidden = !!usuario;
+      sesion.hidden = !usuario;
+      if (usuario) {
+        document.getElementById('nombre').textContent = usuario.name;
+        document.getElementById('rol').textContent = usuario.role;
+      }
+    }
+
+    async function cargarSesion() {
+      const res = await fetch('/api/sesion');
+      mostrar(res.ok ? await res.json() : null);
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.textContent = '';
+      const datos = Object.fromEntries(new FormData(form));
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(datos),
+      });
+      const cuerpo = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        error.textContent = cuerpo.error || 'No se pudo entrar';
+        return;
+      }
+      form.reset();
+      mostrar(cuerpo);
+    });
+
+    document.getElementById('salir').addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      mostrar(null);
+    });
+
+    cargarSesion();
+  </script>
 </body>
 </html>
