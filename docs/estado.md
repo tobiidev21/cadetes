@@ -1,6 +1,6 @@
 # Estado
 
-Prueba técnica: en curso. Pasos 1 y 2 hechos; paso 3 en revisión.
+Prueba técnica: en curso. Pasos 1, 2 y 3 hechos.
 
 ## Paso 1 — Esqueleto y deploy (`spike/esqueleto`)
 
@@ -159,7 +159,7 @@ Pantalla, en Chrome headless manejado por DevTools Protocol, admin y cadete en c
 
 ### Antes de mergear
 
-- [ ] Probar en el dominio de Railway: el admin crea un pedido desde la compu eligiendo un cadete, y aparece en el celular del cadete al recargar.
+- [x] Probar en el dominio de Railway: el admin crea un pedido desde la compu eligiendo un cadete, y aparece en el celular del cadete al recargar.
 
 ### Fuera de este paso
 
