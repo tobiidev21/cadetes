@@ -19,6 +19,7 @@ import (
 	"github.com/tobiidev21/cadetes/db/migrations"
 	"github.com/tobiidev21/cadetes/internal/auth"
 	"github.com/tobiidev21/cadetes/internal/db"
+	"github.com/tobiidev21/cadetes/internal/orders"
 	"github.com/tobiidev21/cadetes/web"
 )
 
@@ -56,7 +57,8 @@ func run() error {
 		return err
 	}
 
-	authSvc := auth.NewService(db.New(pool))
+	queries := db.New(pool)
+	authSvc := auth.NewService(queries)
 	created, err := authSvc.EnsureInitialAdmin(ctx, os.Getenv("ADMIN_INITIAL_PASSWORD"))
 	if err != nil {
 		return fmt.Errorf("admin inicial: %w", err)
@@ -67,7 +69,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           routes(pool, auth.NewHandler(authSvc)),
+		Handler:           routes(pool, auth.NewHandler(authSvc), orders.NewHandler(orders.NewService(queries))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -137,7 +139,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func routes(pool *pgxpool.Pool, authH *auth.Handler) http.Handler {
+func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +163,9 @@ func routes(pool *pgxpool.Pool, authH *auth.Handler) http.Handler {
 	mux.Handle("GET /api/sesion", authH.RequireLogin(http.HandlerFunc(authH.Session)))
 	mux.Handle("GET /api/usuarios", admin(http.HandlerFunc(authH.ListUsers)))
 	mux.Handle("POST /api/usuarios", admin(http.HandlerFunc(authH.CreateUser)))
+	mux.Handle("GET /api/cadetes", admin(http.HandlerFunc(ordersH.ListCouriers)))
+	mux.Handle("GET /api/pedidos", authH.RequireLogin(http.HandlerFunc(ordersH.List)))
+	mux.Handle("POST /api/pedidos", admin(http.HandlerFunc(ordersH.Create)))
 
 	mux.Handle("GET /", http.FileServerFS(web.FS()))
 

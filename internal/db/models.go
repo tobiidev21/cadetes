@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+type Order struct {
+	ID             int64
+	PickupAddress  string
+	DropoffAddress string
+	PriceCents     int64
+	Status         string
+	CourierID      *int64
+	CreatedBy      int64
+	CreatedAt      time.Time
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    int64
