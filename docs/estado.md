@@ -31,8 +31,7 @@ En Samsung con ahorro de batería, la solución que funcionó fue agregar la app
 - **Suscripción push al cerrar sesión**: hoy no se borra. Al cerrar sesión, borrar la suscripción de ese dispositivo.
 - **Guía de configuración por marca** dentro de la app (Samsung, Xiaomi, Motorola, etc.) para que el ahorro de batería no frene los avisos, más un botón de "aviso de prueba" en el perfil del cadete.
 - **Límite de intentos de login** contra fuerza bruta.
-- **Límite de largo en las direcciones del pedido**: el contenido de un push tiene un tope de unos 4 KB.
-- **Funciones de JSON duplicadas** entre auth y orders: pasarlas a un paquete común.
+- **Funciones de JSON duplicadas** entre auth, orders y push: pasarlas a un paquete común.
 - **Vite en el frontend** (requiere Node en el Dockerfile).
 - **Entorno de pruebas**: hoy solo se prueba en Railway después del merge. Usar entornos por PR o un staging aparte.
 - **Proyecto de producción desde cero**: repo, Railway y base nuevos, sin datos ni usuarios de la prueba técnica. Producción en Railway Pro.
