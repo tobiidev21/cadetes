@@ -20,19 +20,90 @@
     <p><button id="salir" type="button">Salir</button></p>
   </div>
 
+  <div id="admin" hidden>
+    <h2>Nuevo cadete</h2>
+    <form id="nuevo-cadete">
+      <p><label>Usuario<br><input name="username" autocomplete="off" autocapitalize="none" required></label></p>
+      <p><label>Nombre<br><input name="name" autocomplete="off" required></label></p>
+      <p><label>Contraseña<br><input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label></p>
+      <p><button type="submit">Crear cadete</button></p>
+      <p id="resultado-cadete" role="status"></p>
+    </form>
+
+    <h2>Usuarios</h2>
+    <p id="error-usuarios" role="alert"></p>
+    <table>
+      <thead>
+        <tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Activo</th></tr>
+      </thead>
+      <tbody id="usuarios"></tbody>
+    </table>
+  </div>
+
   <script>
     const form = document.getElementById('login');
     const sesion = document.getElementById('sesion');
     const error = document.getElementById('error');
+    const admin = document.getElementById('admin');
+    const nuevoCadete = document.getElementById('nuevo-cadete');
+    const resultadoCadete = document.getElementById('resultado-cadete');
 
     function mostrar(usuario) {
       form.hidden = !!usuario;
       sesion.hidden = !usuario;
+      const esAdmin = !!usuario && usuario.role === 'admin';
+      admin.hidden = !esAdmin;
       if (usuario) {
         document.getElementById('nombre').textContent = usuario.name;
         document.getElementById('rol').textContent = usuario.role;
       }
+      if (esAdmin) {
+        cargarUsuarios();
+      } else {
+        document.getElementById('usuarios').replaceChildren();
+        resultadoCadete.textContent = '';
+      }
     }
+
+    async function cargarUsuarios() {
+      const errorUsuarios = document.getElementById('error-usuarios');
+      errorUsuarios.textContent = '';
+      const res = await fetch('/api/usuarios');
+      const cuerpo = await res.json().catch(() => null);
+      if (!res.ok) {
+        errorUsuarios.textContent = (cuerpo && cuerpo.error) || 'No se pudo cargar el listado';
+        return;
+      }
+      const filas = cuerpo.map((u) => {
+        const tr = document.createElement('tr');
+        for (const valor of [u.username, u.name, u.role, u.active ? 'sí' : 'no']) {
+          const td = document.createElement('td');
+          td.textContent = valor;
+          tr.append(td);
+        }
+        return tr;
+      });
+      document.getElementById('usuarios').replaceChildren(...filas);
+    }
+
+    nuevoCadete.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      resultadoCadete.textContent = '';
+      const datos = Object.fromEntries(new FormData(nuevoCadete));
+      const res = await fetch('/api/usuarios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...datos, role: 'cadete' }),
+      });
+      const cuerpo = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        resultadoCadete.textContent = cuerpo.error || 'No se pudo crear el cadete';
+        return;
+      }
+      nuevoCadete.reset();
+      resultadoCadete.textContent = `Cadete ${cuerpo.username} creado.`;
+      cargarUsuarios();
+    });
 
     async function cargarSesion() {
       const res = await fetch('/api/sesion');

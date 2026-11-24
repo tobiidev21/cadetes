@@ -60,7 +60,9 @@ Imagen construida con `docker build` y corrida contra un Postgres 18 descartable
   - `GET /api/sesion` (cualquier usuario logueado) → usuario actual.
   - `GET /api/usuarios` y `POST /api/usuarios` `{"username","password","name","role"}` (solo admin; rol por defecto `cadete`). Sin esto no hay forma de crear un cadete para la prueba.
   - Todo el mux pasa por `http.CrossOriginProtection` (estándar desde Go 1.25): rechaza POST de otro origen además de `SameSite=Lax`.
-- `web/static/index.html`: formulario de login mínimo, sin diseño, que muestra nombre y rol y permite salir.
+- `web/static/index.html` (sin diseño):
+  - Formulario de login; muestra nombre y rol y permite salir.
+  - Solo para el admin: formulario "Nuevo cadete" (usuario, nombre, contraseña) que hace `POST /api/usuarios` con rol `cadete`, y tabla de usuarios con `GET /api/usuarios` que se recarga después de cada alta. Los errores del servidor se muestran tal cual. Ocultar la sección es solo comodidad: la protección real es el 403 del servidor.
 
 ### Cómo se probó
 
@@ -85,6 +87,12 @@ De punta a punta, imagen Docker contra Postgres 18 descartable, con curl:
 - En la base: hashes bcrypt (`$2a$10$`), `sessions` con el SHA-256 de la cookie y ninguna fila con el token en claro.
 - Logout → 204; la misma cookie después → 401.
 - Reinicio con otra `ADMIN_INITIAL_PASSWORD`: no crea nada, la clave original sigue andando y la nueva no.
+
+Pantalla, en Chrome headless manejado por DevTools Protocol contra la imagen y un Postgres descartable:
+
+- Sin sesión, la sección de admin está oculta. Al entrar el admin, se ve y la tabla lista al admin.
+- Crear el cadete `Juan` → mensaje "Cadete juan creado.", aparece en la tabla y el formulario se vacía. Repetirlo → "Ese usuario ya existe".
+- Al salir, la sección se oculta y la tabla se vacía. El cadete entra y no ve la sección, tampoco después de recargar.
 
 ### Antes de mergear
 
