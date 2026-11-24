@@ -1,6 +1,41 @@
 # Estado
 
-Prueba técnica: en curso. Pasos 1, 2 y 3 hechos.
+Prueba técnica: hecha. Stack confirmado.
+
+Pasos 1 a 5 hechos.
+
+## Resultados de la prueba de push
+
+| Dispositivo | Escenario | Resultado | Demora | Notas |
+| --- | --- | --- | --- | --- |
+| iPhone (PWA agregada desde Safari) | Desbloqueado | Llegó | < 1 s | Al tocar abre el pedido |
+| iPhone (PWA agregada desde Safari) | Bloqueado 20 min, app cerrada | Llegó | Instantáneo | |
+| Samsung Galaxy A22+ (Chrome) | Uso normal | Llegó | Inmediato | Al tocar abre el pedido |
+| Samsung Galaxy A22+ (Chrome) | Ahorro de batería activado, sin excepción | No llegó hasta desbloquear | Al desbloquear (+2 a 3 s) | Pasa aunque el teléfono esté bloqueado poco tiempo: lo causa el ahorro de batería, no la espera |
+| Samsung Galaxy A22+ (Chrome) | Ahorro activado, app "Cadetes" en "Aplicaciones que nunca se suspenden" | Llegó | 4 a 5 s | Chrome no aparece en esas listas de Samsung; la PWA instalada sí, como app aparte |
+
+## Conclusión
+
+El stack Go + Postgres + PWA en Railway queda confirmado: login, pedidos, push y deploy automático funcionan en producción y en celulares reales.
+
+Web Push en PWA alcanza; no hace falta Capacitor. La demora con ahorro de batería en Samsung se debe al sistema y no a la app. Capacitor no la resolvería, porque Chrome en Android ya recibe el push por Firebase Cloud Messaging, igual que una app nativa. Se resuelve con la configuración del teléfono.
+
+En iPhone, el push solo funciona con la app agregada a la pantalla de inicio desde Safari y abierta desde ese ícono.
+
+En Samsung con ahorro de batería, la solución que funcionó fue agregar la app "Cadetes" a "Aplicaciones que nunca se suspenden" (Ajustes → Batería → Límites de uso en segundo plano). Es el paso que tiene que incluir la guía de configuración para cadetes.
+
+## Pendientes para el MVP
+
+- **Aviso en pantalla bloqueada**: hoy muestra las direcciones de retiro y de entrega. Propuesta: mostrar solo el retiro (suele ser un comercio) y la entrega recién al abrir la app con sesión. Consultarlo con el cliente.
+- **Ids consecutivos en el aviso**: "Pedido N° 42" deja inferir el volumen de pedidos. Usar un código corto.
+- **Suscripción push al cerrar sesión**: hoy no se borra. Al cerrar sesión, borrar la suscripción de ese dispositivo.
+- **Guía de configuración por marca** dentro de la app (Samsung, Xiaomi, Motorola, etc.) para que el ahorro de batería no frene los avisos, más un botón de "aviso de prueba" en el perfil del cadete.
+- **Límite de intentos de login** contra fuerza bruta.
+- **Límite de largo en las direcciones del pedido**: el contenido de un push tiene un tope de unos 4 KB.
+- **Funciones de JSON duplicadas** entre auth y orders: pasarlas a un paquete común.
+- **Vite en el frontend** (requiere Node en el Dockerfile).
+- **Entorno de pruebas**: hoy solo se prueba en Railway después del merge. Usar entornos por PR o un staging aparte.
+- **Proyecto de producción desde cero**: repo, Railway y base nuevos, sin datos ni usuarios de la prueba técnica. Producción en Railway Pro.
 
 ## Paso 1 — Esqueleto y deploy (`spike/esqueleto`)
 
@@ -33,11 +68,11 @@ Imagen construida con `docker build` y corrida contra un Postgres 18 descartable
 
 ### Pendiente para cerrar el paso (Railway)
 
-- [ ] Crear proyecto en Railway, agregar Postgres y conectar el repo de GitHub (rama `main`).
-- [ ] En el servicio de la app, definir `DATABASE_URL` como referencia a la del Postgres (`${{Postgres.DATABASE_URL}}`).
-- [ ] Generar dominio público y comprobar que `https://<dominio>/health` responde `ok`.
+- [x] Crear proyecto en Railway, agregar Postgres y conectar el repo de GitHub (rama `main`).
+- [x] En el servicio de la app, definir `DATABASE_URL` como referencia a la del Postgres (`${{Postgres.DATABASE_URL}}`).
+- [x] Generar dominio público y comprobar que `https://<dominio>/health` responde `ok`.
 - [ ] Opcional: configurar `/health` como healthcheck del servicio en Railway.
-- [ ] Hacer un cambio en `main` y verificar que se despliega solo.
+- [x] Hacer un cambio en `main` y verificar que se despliega solo.
 
 ## Paso 2 — Login y roles (`spike/auth`)
 
@@ -96,8 +131,8 @@ Pantalla, en Chrome headless manejado por DevTools Protocol contra la imagen y u
 
 ### Antes de mergear
 
-- [ ] Definir `ADMIN_INITIAL_PASSWORD` (8 a 72 caracteres) en el servicio de Railway. Sin ella, el deploy de este paso no arranca.
-- [ ] Probar en el dominio de Railway: admin entra, crea un cadete, el cadete entra desde el celular y recibe 403 en `/api/usuarios`.
+- [x] Definir `ADMIN_INITIAL_PASSWORD` (8 a 72 caracteres) en el servicio de Railway. Sin ella, el deploy de este paso no arranca.
+- [x] Probar en el dominio de Railway: admin entra, crea un cadete, el cadete entra desde el celular y recibe 403 en `/api/usuarios`.
 
 ### Fuera de este paso
 
@@ -224,8 +259,8 @@ De punta a punta, imagen Docker contra Postgres 18 descartable:
 
 ### Antes de mergear
 
-- [ ] Generar las claves con `go run ./cmd/vapid` y cargar en Railway `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` (`mailto:` con un email real). **Sin ellas el deploy de este paso no arranca.**
-- [ ] Probar en el dominio de Railway: el cadete toca "Activar notificaciones" en el celular (en iPhone, con la app agregada a la pantalla de inicio), bloquea el teléfono, el admin le asigna un pedido y suena la notificación. Al tocarla se abre el pedido.
+- [x] Generar las claves con `go run ./cmd/vapid` y cargar en Railway `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` (`mailto:` con un email real). **Sin ellas el deploy de este paso no arranca.**
+- [x] Probar en el dominio de Railway: el cadete toca "Activar notificaciones" en el celular (en iPhone, con la app agregada a la pantalla de inicio), bloquea el teléfono, el admin le asigna un pedido y suena la notificación. Al tocarla se abre el pedido.
 
 ### Fuera de este paso
 
