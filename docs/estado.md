@@ -164,3 +164,71 @@ Pantalla, en Chrome headless manejado por DevTools Protocol, admin y cadete en c
 ### Fuera de este paso
 
 Sin pedidos `pendiente` (sin cadete), reasignación, marcar como entregado ni vista de detalle `/pedidos/{id}` (llega con el push en el paso 4). Los listados no tienen paginación: alcanza para la prueba.
+
+## Paso 4 — Push (`spike/push`)
+
+### Qué se hizo
+
+- `db/migrations/00004_push.sql`: tabla `push_subscriptions` según el modelo del plan. `endpoint` único (identifica al dispositivo); `ON DELETE CASCADE` con `users`.
+- `internal/push` (con `webpush-go` v1.4.0):
+  - **Configuración**: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` son obligatorias; si falta alguna o está mal, **la app no arranca** y dice cuál. Se valida que las claves tengan el formato correcto, que la pública corresponda a la privada (detecta claves al revés o de pares distintos) y que el subject sea `mailto:` con un email válido o una URL `https://`.
+  - **Suscripción**: `POST /api/push/suscripciones` (solo cadetes) recibe `PushSubscription.toJSON()` y hace upsert por endpoint: si en el mismo teléfono entra otro cadete y activa, el dispositivo pasa a ser suyo. Se validan las claves del navegador (`p256dh` punto P-256, `auth` 16 bytes).
+  - **Solo servicios push conocidos**: el endpoint tiene que ser `https` en FCM (Chrome/Android), Mozilla, Apple o Windows. El servidor hace un POST a esa URL; sin esta lista, un usuario podría registrar una URL interna y usar el servidor como proxy. El cliente HTTP del envío tampoco sigue redirecciones.
+  - **Envío**: al crear un pedido, `orders` avisa a `push` (interfaz `orders.Notifier`), que manda a **todos los dispositivos del cadete** en una goroutine aparte: la respuesta al admin no espera a los servicios push. Urgencia `high`, TTL 1 hora (webpush-go manda `TTL: 0` si no se indica, y con 0 un teléfono sin señal en ese momento no lo recibe nunca). Mensaje: `Nuevo pedido N° X`, retiro y entrega, URL `/pedidos/X`.
+  - Si el servicio push responde **404 o 410, se borra la suscripción**; cualquier otro error se registra y se sigue con el resto de los dispositivos. Cada envío deja en el log cuántos dispositivos había, cuántos se enviaron, cuántos se borraron y cuánto tardó (sirve para la tabla del paso 5).
+  - webpush-go le antepone `mailto:` al subject si no empieza con `https:`; con `VAPID_SUBJECT=mailto:...` el JWT quedaba `mailto:mailto:...`, que Apple rechaza. Se le pasa sin el prefijo (hay test que revisa el JWT).
+  - Al apagar, después de cerrar el servidor HTTP se esperan los envíos en curso (dentro del mismo timeout de 10 s).
+- `cmd/vapid`: `go run ./cmd/vapid` imprime `VAPID_PUBLIC_KEY=…` y `VAPID_PRIVATE_KEY=…` listas para pegar.
+- `orders`: `GET /api/pedidos/{id}` (cualquier usuario logueado). El cadete solo ve los suyos; si pide uno ajeno recibe 404, igual que si no existiera.
+- Rutas nuevas: `GET /api/push/clave` (clave VAPID pública, con sesión), `POST /api/push/suscripciones` (cadete), `GET /api/pedidos/{id}`, y `GET /pedidos/{id}` que sirve la misma página.
+- Frontend (sigue siendo HTML estático, sin Vite):
+  - `manifest.webmanifest` (`display: standalone`, íconos 192 y 512 generados, sin diseño), `apple-touch-icon` y `theme-color`. Se registra el tipo `application/manifest+json`, porque la imagen distroless no trae `/etc/mime.types`.
+  - `sw.js`: solo push, no cachea nada. Muestra siempre una notificación por cada push (Safari da de baja la suscripción si no lo hace). Al tocarla, si la app ya está abierta la lleva a `/pedidos/X` y la trae al frente; si no, la abre ahí. Maneja `pushsubscriptionchange`. Se sirve con `Cache-Control: no-cache`.
+  - Sección "Notificaciones" solo para cadetes, con botón **"Activar notificaciones"**: el permiso se pide solo al tocarlo, nunca al cargar. Al abrir la app, si ya estaba activada reenvía la suscripción (por si el servidor la borró o cambió el cadete) y, si cambiaron las claves VAPID, se da de baja para volver a activar. En iPhone sin instalar explica cómo agregar la app a la pantalla de inicio; si el permiso está bloqueado, lo dice.
+  - `/pedidos/{id}` muestra el detalle del pedido arriba de la lista; el N° de cada fila es un enlace.
+
+### Cómo se probó
+
+Tests (`go test -race ./...`):
+
+- `internal/push`:
+  - Configuración: claves recién generadas pasan, también con relleno `=`. Fallan si están vacías, rotas, al revés, de pares distintos, o con un subject sin esquema, `http:` o `mailto:` sin email válido.
+  - Endpoints aceptados: FCM, Mozilla, Apple, Windows y en mayúsculas. Rechazados: `http`, dominio ajeno, `fcm.googleapis.com.evil…`, `evilfcm.googleapis.com`, con usuario, con puerto, IP, `localhost` y endpoints demasiado largos. Claves del navegador inválidas también se rechazan.
+  - El upsert le pasa el dispositivo a otro usuario. El user agent se recorta sin cortar caracteres UTF-8 por la mitad.
+  - Con respuestas 201, 410, 404, 500, 429 y error de red, solo se borran las de 404 y 410; los dispositivos de otro usuario no reciben nada.
+  - El mensaje de pedido asignado tiene título, cuerpo, URL y tag correctos; un pedido sin cadete no manda nada.
+  - **Envío real con webpush-go a un servicio push de prueba (TLS)**: el test descifra el cuerpo como lo haría el navegador (RFC 8291) y obtiene el mensaje original. Revisa `Urgency: high`, `TTL: 3600`, `Content-Encoding: aes128gcm`, el JWT VAPID (`sub` con un solo `mailto:`, `aud` = origen del endpoint) y que no sigue redirecciones.
+  - HTTP: 204 con el JSON tal cual lo arma el navegador (con `expirationTime: null`); 400 con endpoint ajeno o JSON inválido; 401 sin usuario.
+- `internal/orders`:
+  - Crear avisa una vez al cadete correcto; datos inválidos o un cadete inactivo no avisan.
+  - Detalle: cada cadete ve el suyo; el ajeno o un id inexistente dan 404; el admin ve cualquiera.
+
+De punta a punta, imagen Docker contra Postgres 18 descartable:
+
+- Sin variables VAPID, con `VAPID_SUBJECT` sin `mailto:` o con las claves al revés: sale con código 1 y el mensaje que corresponde. Con todo bien, aplica la migración 4.
+- curl:
+  - `GET /api/push/clave` → 200 con sesión y 401 sin sesión.
+  - El admin en `POST /api/push/suscripciones` → 403. Un endpoint `https://169.254.169.254/…` → 400.
+  - El cadete pidiendo un pedido ajeno → 404.
+  - `/pedidos/1` devuelve la página; el manifest sale como `application/manifest+json`, `sw.js` con `no-cache`.
+- Envío de verdad desde la app: suscripciones del cadete apuntando a un servicio push falso (que descifra) y a FCM con un token inventado.
+  - Al crear el pedido, la respuesta tardó 8 ms.
+  - El servicio falso recibió el mensaje cifrado, lo descifró bien y vio `Urgency=high` y `TTL=3600`. Respondió 201 en `/ok` y 410 en `/gone`.
+  - **FCM real respondió 410 al token inventado**. Las dos suscripciones con 410 se borraron y la del otro cadete no recibió nada. Log: `dispositivos=3 enviados=1 borrados=2 duracion=1.482s`.
+- Chrome headless por DevTools Protocol:
+  - El cadete ve la sección y el botón; el admin no.
+  - `/pedidos/{id}` muestra el detalle del pedido propio; uno ajeno muestra "No encontramos ese pedido o no está asignado a vos."
+  - **No se pudo completar la suscripción**: el Chrome headless de esta máquina no logra registrarse en FCM (`PHONE_REGISTRATION_ERROR` / `wrong_secret` en el log de GCM). Que llegue a un navegador real queda para los celulares.
+
+**No probado todavía**: la notificación en un teléfono real (Android e iPhone), el toque que abre `/pedidos/X` y el apagado esperando envíos en curso.
+
+### Antes de mergear
+
+- [ ] Generar las claves con `go run ./cmd/vapid` y cargar en Railway `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` (`mailto:` con un email real). **Sin ellas el deploy de este paso no arranca.**
+- [ ] Probar en el dominio de Railway: el cadete toca "Activar notificaciones" en el celular (en iPhone, con la app agregada a la pantalla de inicio), bloquea el teléfono, el admin le asigna un pedido y suena la notificación. Al tocarla se abre el pedido.
+
+### Fuera de este paso
+
+- Al salir no se borra la suscripción del dispositivo: si nadie vuelve a entrar en ese teléfono, le siguen llegando los avisos del último cadete.
+- No hay límite de dispositivos por usuario, ni envío de prueba desde la pantalla.
+- Vite todavía no entró: el frontend sigue siendo estático en `web/static`. Conviene sumarlo en un paso aparte, porque cambia el Dockerfile (etapa de Node).

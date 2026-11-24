@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/tobiidev21/cadetes/internal/auth"
 )
@@ -37,6 +38,31 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// Get atiende GET /api/pedidos/{id}: 404 si no existe o es de otro cadete.
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Tenés que iniciar sesión")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "Pedido no encontrado")
+		return
+	}
+	o, err := h.svc.Get(r.Context(), u, id)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "Pedido no encontrado")
+		return
+	}
+	if err != nil {
+		slog.Error("buscando pedido", "err", err)
+		writeError(w, http.StatusInternalServerError, "Error interno")
+		return
+	}
+	writeJSON(w, http.StatusOK, o)
 }
 
 // Create atiende POST /api/pedidos (solo admin) con

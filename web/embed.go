@@ -4,7 +4,14 @@ package web
 import (
 	"embed"
 	"io/fs"
+	"mime"
 )
+
+func init() {
+	// La imagen final (distroless) no trae /etc/mime.types y Go no conoce
+	// esta extensión: sin esto el manifest saldría como text/plain.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 //go:embed static
 var embedded embed.FS

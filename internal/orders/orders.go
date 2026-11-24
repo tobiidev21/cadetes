@@ -32,6 +32,9 @@ const MaxAddressLen = 200
 // inactivo.
 var ErrInvalidCourier = errors.New("el cadete elegido no existe o no está activo")
 
+// ErrNotFound es que el pedido no existe o el usuario no lo puede ver.
+var ErrNotFound = errors.New("pedido no encontrado")
+
 // InputError es un dato inválido que mandó el usuario; el mensaje se puede
 // mostrar tal cual.
 type InputError string
@@ -71,16 +74,25 @@ type Store interface {
 	ListOrders(ctx context.Context) ([]db.ListOrdersRow, error)
 	ListOrdersByCourier(ctx context.Context, courierID int64) ([]db.ListOrdersByCourierRow, error)
 	ListActiveCouriers(ctx context.Context) ([]db.ListActiveCouriersRow, error)
+	GetOrder(ctx context.Context, id int64) (db.GetOrderRow, error)
+	GetOrderForCourier(ctx context.Context, arg db.GetOrderForCourierParams) (db.GetOrderForCourierRow, error)
+}
+
+// Notifier se entera de los pedidos recién asignados (push al cadete). Tiene
+// que volver enseguida: el envío corre aparte y no frena la respuesta.
+type Notifier interface {
+	OrderAssigned(o Order)
 }
 
 // Service implementa la lógica de pedidos.
 type Service struct {
-	store Store
+	store    Store
+	notifier Notifier
 }
 
-// NewService arma el servicio.
-func NewService(store Store) *Service {
-	return &Service{store: store}
+// NewService arma el servicio. notifier puede ser nil (sin avisos).
+func NewService(store Store, notifier Notifier) *Service {
+	return &Service{store: store, notifier: notifier}
 }
 
 // Create valida los datos y crea el pedido asignado al cadete elegido. El
@@ -114,7 +126,7 @@ func (s *Service) Create(ctx context.Context, createdBy auth.User, in NewOrder) 
 	if err != nil {
 		return Order{}, fmt.Errorf("creando pedido: %w", err)
 	}
-	return Order{
+	out := Order{
 		ID:             o.ID,
 		PickupAddress:  o.PickupAddress,
 		DropoffAddress: o.DropoffAddress,
@@ -122,7 +134,38 @@ func (s *Service) Create(ctx context.Context, createdBy auth.User, in NewOrder) 
 		Status:         Status(o.Status),
 		CourierID:      o.CourierID,
 		CreatedAt:      o.CreatedAt,
-	}, nil
+	}
+	if s.notifier != nil {
+		s.notifier.OrderAssigned(out)
+	}
+	return out, nil
+}
+
+// Get devuelve un pedido si el usuario lo puede ver: el admin, cualquiera; el
+// cadete, solo los asignados a él. Si no, ErrNotFound (no se distingue entre
+// "no existe" y "es de otro").
+func (s *Service) Get(ctx context.Context, u auth.User, id int64) (Order, error) {
+	var (
+		row db.GetOrderRow
+		err error
+	)
+	switch u.Role {
+	case auth.RoleAdmin:
+		row, err = s.store.GetOrder(ctx, id)
+	case auth.RoleCadete:
+		var r db.GetOrderForCourierRow
+		r, err = s.store.GetOrderForCourier(ctx, db.GetOrderForCourierParams{ID: id, CourierID: u.ID})
+		row = db.GetOrderRow(r)
+	default:
+		return Order{}, ErrNotFound
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrNotFound
+	}
+	if err != nil {
+		return Order{}, fmt.Errorf("buscando pedido: %w", err)
+	}
+	return toOrder(db.ListOrdersRow(row)), nil
 }
 
 // ListFor devuelve los pedidos que puede ver el usuario: el admin, todos; el

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +95,40 @@ func (f *fakeStore) ListOrdersByCourier(_ context.Context, courierID int64) ([]d
 	return out, nil
 }
 
+func (f *fakeStore) GetOrder(_ context.Context, id int64) (db.GetOrderRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.orders {
+		if o.ID == id {
+			return db.GetOrderRow(f.row(o)), nil
+		}
+	}
+	return db.GetOrderRow{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) GetOrderForCourier(_ context.Context, arg db.GetOrderForCourierParams) (db.GetOrderForCourierRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, o := range f.orders {
+		if o.ID == arg.ID && o.CourierID != nil && *o.CourierID == arg.CourierID {
+			return db.GetOrderForCourierRow(f.row(o)), nil
+		}
+	}
+	return db.GetOrderForCourierRow{}, pgx.ErrNoRows
+}
+
+// fakeNotifier registra los avisos.
+type fakeNotifier struct {
+	mu       sync.Mutex
+	assigned []Order
+}
+
+func (n *fakeNotifier) OrderAssigned(o Order) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.assigned = append(n.assigned, o)
+}
+
 func (f *fakeStore) ListActiveCouriers(context.Context) ([]db.ListActiveCouriersRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -119,10 +154,16 @@ func dbUser(u auth.User, active bool) db.User {
 }
 
 func newTestService() (*Service, *fakeStore) {
+	svc, store, _ := newTestServiceWithNotifier()
+	return svc, store
+}
+
+func newTestServiceWithNotifier() (*Service, *fakeStore, *fakeNotifier) {
 	store := newFakeStore(
 		dbUser(admin, true), dbUser(juan, true), dbUser(ana, true), dbUser(inactivo, false),
 	)
-	return NewService(store), store
+	n := &fakeNotifier{}
+	return NewService(store, n), store, n
 }
 
 func validOrder(courierID int64) NewOrder {
@@ -155,6 +196,92 @@ func TestCreateAssignsToCourier(t *testing.T) {
 	}
 	if got := store.orders[0].CreatedBy; got != admin.ID {
 		t.Errorf("created_by = %d, quería %d", got, admin.ID)
+	}
+}
+
+func TestCreateNotifiesCourier(t *testing.T) {
+	svc, _, n := newTestServiceWithNotifier()
+	o, err := svc.Create(context.Background(), admin, validOrder(juan.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(n.assigned) != 1 || n.assigned[0].ID != o.ID || *n.assigned[0].CourierID != juan.ID {
+		t.Fatalf("avisos = %+v, quería uno del pedido %d a juan", n.assigned, o.ID)
+	}
+
+	// Ni los datos inválidos ni un cadete inactivo avisan a nadie.
+	_, _ = svc.Create(context.Background(), admin, validOrder(inactivo.ID))
+	bad := validOrder(juan.ID)
+	bad.PriceCents = 0
+	_, _ = svc.Create(context.Background(), admin, bad)
+	if len(n.assigned) != 1 {
+		t.Errorf("hubo %d avisos, quería 1", len(n.assigned))
+	}
+}
+
+func TestCreateWithoutNotifier(t *testing.T) {
+	store := newFakeStore(dbUser(juan, true))
+	if _, err := NewService(store, nil).Create(context.Background(), admin, validOrder(juan.ID)); err != nil {
+		t.Fatalf("Create sin notifier: %v", err)
+	}
+}
+
+func TestGet(t *testing.T) {
+	svc, _ := newTestService()
+	ctx := context.Background()
+	deJuan, _ := svc.Create(ctx, admin, validOrder(juan.ID))
+	deAna, _ := svc.Create(ctx, admin, validOrder(ana.ID))
+
+	o, err := svc.Get(ctx, juan, deJuan.ID)
+	if err != nil || o.ID != deJuan.ID || o.CourierName == nil || *o.CourierName != "Juan" {
+		t.Fatalf("juan su pedido: %+v, err %v", o, err)
+	}
+	if _, err := svc.Get(ctx, juan, deAna.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("juan el de Ana: err = %v, quería ErrNotFound", err)
+	}
+	if _, err := svc.Get(ctx, admin, deAna.ID); err != nil {
+		t.Errorf("admin el de Ana: %v", err)
+	}
+	if _, err := svc.Get(ctx, admin, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("inexistente: err = %v, quería ErrNotFound", err)
+	}
+	if _, err := svc.Get(ctx, auth.User{ID: 9, Role: "otro"}, deJuan.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("rol desconocido: err = %v, quería ErrNotFound", err)
+	}
+}
+
+func TestHTTPGet(t *testing.T) {
+	svc, _ := newTestService()
+	h := NewHandler(svc)
+	deAna, _ := svc.Create(context.Background(), admin, validOrder(ana.ID))
+
+	get := func(u *auth.User, id string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/pedidos/"+id, nil)
+		req.SetPathValue("id", id)
+		if u != nil {
+			req = req.WithContext(auth.ContextWithUser(req.Context(), *u))
+		}
+		rec := httptest.NewRecorder()
+		h.Get(rec, req)
+		return rec.Code
+	}
+	id := strconv.FormatInt(deAna.ID, 10)
+	for _, c := range []struct {
+		name string
+		u    *auth.User
+		id   string
+		want int
+	}{
+		{"ana el suyo", &ana, id, 200},
+		{"juan el de ana", &juan, id, 404},
+		{"admin", &admin, id, 200},
+		{"id no numérico", &admin, "abc", 404},
+		{"id cero", &admin, "0", 404},
+		{"sin usuario", nil, id, 401},
+	} {
+		if got := get(c.u, c.id); got != c.want {
+			t.Errorf("%s: status = %d, quería %d", c.name, got, c.want)
+		}
 	}
 }
 
