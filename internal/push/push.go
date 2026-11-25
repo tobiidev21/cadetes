@@ -288,7 +288,7 @@ func (w *WebPushSender) Send(ctx context.Context, sub db.PushSubscription, paylo
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	return resp.StatusCode, nil
 }

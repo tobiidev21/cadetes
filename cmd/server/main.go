@@ -132,7 +132,7 @@ func connect(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 // migrate aplica las migraciones de goose embebidas en el binario.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
 	if err != nil {
@@ -169,7 +169,7 @@ func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pu
 			http.Error(w, "db no disponible", http.StatusServiceUnavailable)
 			return
 		}
-		fmt.Fprint(w, "ok")
+		_, _ = fmt.Fprint(w, "ok")
 	})
 
 	admin := authH.RequireRole(auth.RoleAdmin)
