@@ -266,3 +266,52 @@ De punta a punta, imagen Docker contra Postgres 18 descartable:
 - Al salir no se borra la suscripción del dispositivo: si nadie vuelve a entrar en ese teléfono, le siguen llegando los avisos del último cadete.
 - No hay límite de dispositivos por usuario, ni envío de prueba desde la pantalla.
 - Vite todavía no entró: el frontend sigue siendo estático en `web/static`. Conviene sumarlo en un paso aparte, porque cambia el Dockerfile (etapa de Node).
+
+## Prueba GPS 1a — Backend de posiciones (`spike/gps-1a`)
+
+Primera de cuatro partes de la prueba de rastreo (ver `docs/spike-gps.md`, que tiene la tabla de mediciones y la API).
+
+### Qué se hizo
+
+- `db/migrations/00005_positions.sql`: tabla `positions` (nombres en inglés, como el resto del esquema; la API habla en castellano).
+  - `lat`/`lng` `double precision`, `accuracy_m` `real`, `speed_ms` y `heading_deg` opcionales, `captured_at` (hora del celular), `received_at` (`now()` del servidor), `source` (`pwa` o `nativa`), `visible` opcional. Todo con `CHECK` de rangos.
+  - Índice **único** en `(courier_id, captured_at DESC)`: un lote reenviado no duplica posiciones (el insert usa `ON CONFLICT DO NOTHING`).
+- `db/queries/positions.sql`:
+  - `InsertPositions`: el lote entero en una sentencia con `jsonb_to_recordset` (los arreglos de sqlc no admiten `NULL`, que hacen falta para los opcionales). Devuelve solo las filas nuevas.
+  - `LatestPositions` (`DISTINCT ON`), `CourierTrack` (tope de 10.000 desde la más vieja) y `CourierSummary` (con `lag()`: cantidad, intervalo medio, huecos de más de 60 s y el mayor, demora media y máxima, precisión media, `visible = false`). sqlc no deja devolver agregados nulos: salen con `COALESCE` y el servicio los vuelve `null` cuando no hay datos.
+- `internal/positions`:
+  - Validación del lote (1 a 100, rangos, `capturada_en` entre −24 h y +1 min, origen). Un error rechaza el lote entero con 400 y dice qué posición falló.
+  - El cadete sale de la sesión; un `cadete_id` en el body da 400 (campo desconocido).
+  - Límite por cadete en memoria (token bucket sin dependencias): 10 seguidos y 1 cada 2 s; si se pasa, 429 con `Retry-After`.
+  - Difusor en memoria: cada suscriptor tiene un buffer de 64 y, si se llena, se le descartan mensajes. Publicar nunca bloquea.
+  - SSE con `net/http` y `http.ResponseController`: heartbeat cada 15 s, se quita el `WriteTimeout` (30 s) solo para esa conexión y sale al cortarse el contexto del request.
+- `cmd/server/main.go`: rutas `POST /api/posiciones` (cadete) y `GET /api/posiciones/{stream,ultimas,recorrido,resumen}` (admin). `srv.RegisterOnShutdown(broker.Close)`: sin eso, un stream abierto colgaba el apagado 10 s.
+- Se corrigieron 3 avisos de `errcheck` que ya estaban (`main.go` y `push.go`) para dejar `golangci-lint` limpio.
+
+### Cómo se probó
+
+Tests (`go test -race ./...`):
+
+- Validación: cada regla con su mensaje (bordes incluidos: 100 pasan y 101 no, +59 s pasa y +61 s no, rumbo 359,9 pasa y 360 no). Un lote con una sola posición mala no llega a la base.
+- `cmd/server/routes_test.go`, con el mux real y login real sobre un store en memoria: sin sesión, POST y los 4 GET dan 401; un cadete en los GET da 403; un admin en POST da 403; un cadete en POST da 204.
+- `cadete_id` en el body (arriba o dentro de una posición) da 400 y no guarda nada; un lote válido se guarda con el id de la sesión.
+- Stream contra un `httptest.Server` con `ReadTimeout` y `WriteTimeout` de 300 ms: sigue vivo pasado el timeout, llegan pings y el evento con la posición recién insertada. Al cortar el cliente se libera la suscripción; al cerrar el broker, el stream termina. Sin el `SetWriteDeadline` el test falla.
+- Difusor: un suscriptor que no lee no bloquea `Publish` y se le descartan exactamente los mensajes que no entran; el otro recibe todos.
+- Límite: la ráfaga pasa, el siguiente da 429 con `Retry-After: 2`, vuelve a pasar al reponerse y no afecta a otros cadetes.
+- **Contra Postgres 18** (Podman, `TEST_DATABASE_URL`; sin ella se saltean):
+  - Insert con opcionales nulos y milisegundos que se conservan; el reenvío del lote inserta 0 filas. Otro cadete en el mismo instante no es duplicado. El `CHECK` rechaza un origen inválido.
+  - Últimas posiciones por cadete y recorrido desde una hora.
+  - Resumen con datos fijos (capturas a 0, 10, 20, 100, 110 y 300 s, demoras de 1 a 9 s): 6 posiciones, intervalo medio de 60 s, 2 huecos con el mayor de 190 s, demora media de 4 s y máxima de 9 s, precisión media de 17,5 m, 2 no visibles. Las posiciones fuera de `[desde, hasta)` no cuentan. Rango vacío da `null`.
+
+De punta a punta, el binario contra una base nueva en Podman, con curl:
+
+- Arranque: aplica la migración 5 (`base al día version=5`).
+- Lotes como cadete: 204. Con `curl -N` abierto como admin llegan los eventos `posiciones` y los `: ping`, y el stream sigue vivo pasados 34 s (más que el `WriteTimeout`).
+- Resumen del lote de prueba: intervalo de 26 s, 1 hueco de 90 s, precisión media de 13 m y 1 no visible, como se esperaba.
+- Cadete en `ultimas`, `stream` y `resumen`: 403. POST sin sesión: 401. Admin en POST: 403. Latitud 95: 400 con mensaje. `cadete_id` en el body: 400.
+- 12 envíos seguidos: 10 dan 204 y 2 dan 429 con `Retry-After: 2`.
+- SIGTERM con un stream abierto: el servidor se apaga en 0,05 s y cierra el stream.
+
+### Fuera de este paso
+
+Pantallas (1b), Capacitor (2a y 2b), limpieza de posiciones viejas, PostGIS y varias instancias del servidor (el difusor es en memoria).
