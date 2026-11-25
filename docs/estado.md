@@ -298,7 +298,7 @@ Tests (`go test -race ./...`):
 - Stream contra un `httptest.Server` con `ReadTimeout` y `WriteTimeout` de 300 ms: sigue vivo pasado el timeout, llegan pings y el evento con la posición recién insertada. Al cortar el cliente se libera la suscripción; al cerrar el broker, el stream termina. Sin el `SetWriteDeadline` el test falla.
 - Difusor: un suscriptor que no lee no bloquea `Publish` y se le descartan exactamente los mensajes que no entran; el otro recibe todos.
 - Límite: la ráfaga pasa, el siguiente da 429 con `Retry-After: 2`, vuelve a pasar al reponerse y no afecta a otros cadetes.
-- **Contra Postgres 18** (Podman, `TEST_DATABASE_URL`; sin ella se saltean):
+- **Contra Postgres 18** con `scripts/test-integracion.sh` (Podman; sin `TEST_DATABASE_URL` se saltean). El script espera a que Postgres acepte conexiones por TCP antes de correr `go test`, porque si no los tests fallaban con `unexpected EOF`. Para el contenedor aunque los tests fallen (probado con un `go test` que sale con 1):
   - Insert con opcionales nulos y milisegundos que se conservan; el reenvío del lote inserta 0 filas. Otro cadete en el mismo instante no es duplicado. El `CHECK` rechaza un origen inválido.
   - Últimas posiciones por cadete y recorrido desde una hora.
   - Resumen con datos fijos (capturas a 0, 10, 20, 100, 110 y 300 s, demoras de 1 a 9 s): 6 posiciones, intervalo medio de 60 s, 2 huecos con el mayor de 190 s, demora media de 4 s y máxima de 9 s, precisión media de 17,5 m, 2 no visibles. Las posiciones fuera de `[desde, hasta)` no cuentan. Rango vacío da `null`.

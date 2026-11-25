@@ -157,10 +157,17 @@ Sin posiciones en el rango, los promedios salen `null`. Los tiempos van en segun
 
 Los tests de la base (`internal/positions/integration_test.go`) corren solo si existe `TEST_DATABASE_URL`. Si no, se saltean y `go test ./...` igual pasa. Cada corrida crea un esquema descartable, aplica las migraciones y lo borra al terminar.
 
-Con Podman, en un contenedor aparte del de desarrollo:
+Se corren con el script, que usa Podman y un contenedor aparte del de desarrollo (`cadetes-test-db`, puerto 5433):
 
 ```sh
-podman run -d --rm --name cadetes-test-db -e POSTGRES_PASSWORD=test -p 5433:5432 docker.io/library/postgres:18
-TEST_DATABASE_URL='postgres://postgres:test@localhost:5433/postgres?sslmode=disable' go test -race -count=1 ./...
-podman stop cadetes-test-db   # con --rm, también lo borra
+scripts/test-integracion.sh
 ```
+
+El script hace esto:
+
+1. Levanta el contenedor.
+2. Espera a que Postgres acepte conexiones por TCP (`pg_isready -h 127.0.0.1`), hasta 60 s. Si los tests arrancan antes, fallan con `unexpected EOF`, porque la imagen tarda unos segundos en inicializarse.
+3. Corre `go test -race -count=1 ./...` con `TEST_DATABASE_URL`.
+4. Para el contenedor al terminar, aunque los tests fallen. Sale con el mismo código que `go test`.
+
+Los argumentos extra pasan a `go test`, por ejemplo: `scripts/test-integracion.sh -run Integration -v`.
