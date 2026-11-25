@@ -19,6 +19,20 @@ type Order struct {
 	CreatedAt      time.Time
 }
 
+type Position struct {
+	ID         int64
+	CourierID  int64
+	Lat        float64
+	Lng        float64
+	AccuracyM  float32
+	SpeedMs    *float32
+	HeadingDeg *float32
+	CapturedAt time.Time
+	ReceivedAt time.Time
+	Source     string
+	Visible    *bool
+}
+
 type PushSubscription struct {
 	ID        int64
 	UserID    int64
