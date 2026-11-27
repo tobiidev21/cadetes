@@ -23,6 +23,8 @@
   <div id="sesion" hidden>
     <p>Entraste como <strong id="nombre"></strong> (<span id="rol"></span>).</p>
     <p><button id="salir" type="button">Salir</button></p>
+    <p id="link-rastreo" hidden><a href="/rastreo.html">Rastreo (prueba)</a></p>
+    <p id="link-mapa" hidden><a href="/mapa.html">Mapa (prueba)</a></p>
   </div>
 
   <div id="notificaciones" hidden>
@@ -129,6 +131,8 @@
       const esCadete = !!usuario && usuario.role === 'cadete';
       admin.hidden = !esAdmin;
       document.getElementById('notificaciones').hidden = !esCadete;
+      document.getElementById('link-rastreo').hidden = !esCadete;
+      document.getElementById('link-mapa').hidden = !esAdmin;
       document.getElementById('detalle').hidden = !usuario || !rutaPedido;
       if (esCadete) prepararNotificaciones();
       if (usuario && rutaPedido) cargarDetalle();
