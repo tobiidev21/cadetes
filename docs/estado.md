@@ -315,3 +315,39 @@ De punta a punta, el binario contra una base nueva en Podman, con curl:
 ### Fuera de este paso
 
 Pantallas (1b), Capacitor (2a y 2b), limpieza de posiciones viejas, PostGIS y varias instancias del servidor (el difusor es en memoria).
+
+## Prueba GPS 1b — Rastreo en la PWA y mapa del admin (`spike/gps-1b`)
+
+Segunda de las cuatro partes. Las pruebas con los celulares se hacen después del deploy (ver "Cómo hacer cada prueba" en `docs/spike-gps.md`).
+
+### Qué se hizo
+
+Sin cambios en el backend. El frontend sigue sin Vite: páginas estáticas y módulos ES nativos (`<script type="module">`), servidos por el `FileServer` que ya existía.
+
+- `web/static/js/cola-posiciones.js`: cola y envío, separados de la geolocalización para que la parte 2b (plugin nativo) use el mismo envío.
+  - Toda posición entra a la cola, que se guarda en `localStorage` con `try/catch` y una clave por cadete (si entra otro cadete en el mismo teléfono, no se mandan posiciones ajenas con su sesión). Tope de 2.000: se descartan las más viejas.
+  - Cada 10 s envía en lotes de hasta 100 hasta vaciarla. 429: pausa por `Retry-After`. Error de red o 5xx: reintenta en el próximo ciclo. 401: pausa con aviso, sin perder la cola.
+  - Antes de enviar descarta y cuenta las posiciones inválidas, con las mismas reglas que el servidor (rangos, precisión, rumbo, `capturada_en` entre −24 h y +1 min, origen). Si igual llega un 400, descarta ese lote, lo registra en la consola con el mensaje del servidor, lo suma a descartadas y deja el mensaje en pantalla.
+- `web/static/rastreo.html` + `js/rastreo.js` ("Rastreo (prueba)", solo cadetes): `watchPosition` con `enableHighAccuracy`, `capturada_en` con milisegundos (`toISOString`), `visible` por posición, contador de pasos a segundo plano, Screen Wake Lock opcional, ayuda de permisos para iPhone y Android. Si la página se recarga mientras rastrea, retoma sola y cuenta la reanudación.
+- `web/static/mapa.html` + `js/mapa.js` ("Mapa (prueba)", solo admins): Leaflet con mosaicos de OSM y crédito, un punto por cadete con nombre y hora, círculo de precisión, recorrido de 2 h. SSE con reconexión: el navegador reconecta solo cuando el stream se corta; si queda cerrado (respuesta que no es 200, p. ej. 502 en un deploy) se recrea con espera creciente hasta 30 s. En cada conexión se vuelven a pedir `/ultimas` y `/recorrido` y se juntan por id. Panel por cadete con demora de la última y el resumen de `/api/posiciones/resumen` para un rango.
+- `web/static/js/sesion.js`: chequeo de sesión y rol compartido por las dos páginas.
+- `web/static/vendor/leaflet/`: Leaflet 1.9.4 copiado del paquete de npm (`leaflet.js`, su `.map`, `leaflet.css`, `images/`, `LICENSE`). Se verificó el sha512 del paquete contra el que publica el registro.
+- `web/static/index.html`: links "Rastreo (prueba)" (cadetes) y "Mapa (prueba)" (admins).
+- `scripts/verificar-gps.mjs`: verificación de punta a punta con Chrome headless por el protocolo de DevTools, sin dependencias.
+
+### Cómo se probó
+
+`golangci-lint run` (0 avisos), `go test ./...` y `go build ./...`. Servidor local contra un Postgres 18 descartable en Podman.
+
+- `scripts/verificar-gps.mjs`, todo bien, en dos variantes:
+  - Con la red del cadete cortada desde DevTools: el mapa sigue al cadete en 3 cambios de coordenadas sin recargarse; sin red quedan 3 pendientes (también en `localStorage`) con el error en pantalla; al volver se envían solas y en el servidor tienen la hora original (demoras de 17 a 20 s); al recargar la página del cadete retoma solo con 1 reanudación; el resumen del panel coincide con la API (posiciones, no visibles, huecos) y consulta el mismo rango; solo se pidió a `localhost` y `tile.openstreetmap.org`.
+  - Con `--servidor-apagado`, matando y volviendo a levantar el binario: lo mismo, y el mapa mostró "Reconectando…" mientras el servidor estaba caído.
+- Reconexión del mapa con un proxy que cortaba el stream cada 20 s (como Railway a los 15 min) y respondía 502 durante 8 s: reabrió a los 3 s después de cada corte; con el 502 reintentó a 1, 2 y 4 s y volvió. Terminó al día, sin recargar y con todo el recorrido del servidor.
+- La cola, aislada en Node con `fetch` simulado: lotes de 100 (250 → 100, 100, 50), inválidas descartadas y contadas, 429 que pausa y reenvía después del `Retry-After`, 400 que descarta solo ese lote y sigue, 401 y 500 que no pierden nada, tope de 2.000 y persistencia entre instancias, campos de más que no viajan.
+- Login por el formulario como cadete y como admin: cada uno ve solo su link; el cadete sigue viendo "Activá las notificaciones" (service worker y clave VAPID funcionan); cada uno, en la pantalla del otro rol, ve "Esta pantalla es solo para …".
+
+Lo que no se puede probar en la compu: el comportamiento en segundo plano (en Chrome headless la página siempre está visible) y el Wake Lock. Eso es lo que miden las pruebas con los celulares.
+
+### Fuera de este paso
+
+Capacitor y código nativo (2a y 2b), proveedor de mapas para producción, Vite.

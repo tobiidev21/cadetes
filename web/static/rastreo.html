@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rastreo (prueba) · Cadetes</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#1d4ed8">
+  <meta name="apple-mobile-web-app-title" content="Cadetes">
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 40rem; padding: 0 1rem 2rem; }
+    button { font-size: 1.1rem; padding: 0.6rem 1.2rem; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }
+    dt { font-weight: 600; }
+    dd { margin: 0; }
+    #estado[data-rastreando="true"] { color: #15803d; font-weight: 700; }
+    .aviso { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.5rem 0.75rem; }
+    .error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <p><a href="/">← Volver</a></p>
+  <h1>Rastreo (prueba)</h1>
+
+  <p id="acceso" class="aviso" hidden></p>
+
+  <div id="pantalla" hidden>
+    <p id="inseguro" class="aviso" hidden>
+      El navegador solo da la ubicación en páginas seguras. Abrí la app por HTTPS (la URL de Railway).
+    </p>
+
+    <p>
+      <button id="empezar" type="button">Empezar</button>
+      <button id="detener" type="button" disabled>Detener</button>
+    </p>
+
+    <p id="wake-lock" hidden>
+      <label><input id="pantalla-encendida" type="checkbox"> Mantener pantalla encendida</label>
+      <span id="estado-wake-lock"></span>
+    </p>
+
+    <div id="ayuda-permiso" class="aviso" hidden>
+      <p><strong>No hay permiso de ubicación.</strong> Para habilitarlo:</p>
+      <p><strong>iPhone</strong></p>
+      <ol>
+        <li>Ajustes → Privacidad y seguridad → Localización: que esté activada.</li>
+        <li>Más abajo, en la misma lista, entrá a "Sitios web de Safari" y elegí "Al usar la app" (o "Preguntar la próxima vez"), con "Ubicación exacta" activada.</li>
+        <li>Si la usás en Safari (no desde el ícono de inicio): tocá "aA" en la barra de direcciones → Configuración del sitio web → Ubicación → Permitir.</li>
+        <li>Volvé a la app y tocá "Empezar".</li>
+      </ol>
+      <p><strong>Android (Chrome)</strong></p>
+      <ol>
+        <li>Desde el ícono de la app: mantenelo apretado → Información de la app → Permisos → Ubicación → Permitir (y "Usar ubicación precisa").</li>
+        <li>Desde Chrome: tocá el ícono a la izquierda de la dirección → Permisos → Ubicación → Permitir.</li>
+        <li>Revisá también Ajustes → Ubicación (activada) y Ajustes → Aplicaciones → Chrome → Permisos → Ubicación.</li>
+        <li>Volvé a la app y tocá "Empezar".</li>
+      </ol>
+    </div>
+
+    <dl>
+      <dt>Estado</dt><dd id="estado" data-rastreando="false">Detenido</dd>
+      <dt>Enviadas</dt><dd id="enviadas">0</dd>
+      <dt>Pendientes en cola</dt><dd id="pendientes">0</dd>
+      <dt>Descartadas</dt><dd id="descartadas">0</dd>
+      <dt>Última precisión</dt><dd id="precision">—</dd>
+      <dt>Última posición</dt><dd id="ultima">—</dd>
+      <dt>Pasó a segundo plano</dt><dd id="segundo-plano">0 veces</dd>
+      <dt>Reanudaciones</dt><dd id="reanudaciones">0</dd>
+      <dt>Errores de GPS</dt><dd id="errores-gps">0</dd>
+    </dl>
+
+    <p id="error-envio" class="error" role="alert"></p>
+    <p id="error-gps" class="error" role="alert"></p>
+    <p id="sin-almacenamiento" class="aviso" hidden>
+      Este navegador no deja guardar la cola: si se recarga la página, se pierden las posiciones pendientes.
+    </p>
+  </div>
+
+  <script type="module" src="/js/rastreo.js"></script>
+</body>
+</html>
