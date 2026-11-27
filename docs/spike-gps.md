@@ -22,6 +22,78 @@ Cómo medir: anotar hora de inicio y fin de cada prueba y consultar el resumen e
 
 (Completar al terminar las cuatro partes.)
 
+## Cómo hacer cada prueba
+
+Las pantallas son **Rastreo (prueba)** (`/rastreo.html`, solo cadetes) y **Mapa (prueba)** (`/mapa.html`, solo admins). Se entra desde los links de la pantalla principal, después de iniciar sesión.
+
+El navegador solo da la ubicación en páginas seguras: HTTPS, o `localhost` en la compu. En la calle se prueba siempre contra la URL de Railway.
+
+### Qué muestra cada pantalla
+
+**Rastreo (prueba)**, en el celular del cadete:
+
+| Dato | Qué es |
+| --- | --- |
+| Estado | Rastreando o Detenido |
+| Enviadas | posiciones que el servidor confirmó desde que se tocó "Empezar" |
+| Pendientes en cola | capturadas que todavía no llegaron al servidor. Se guardan en el celular (`localStorage`) y se reintentan cada 10 s, aunque se recargue la página. Tope: 2.000 |
+| Descartadas | las que no se van a mandar: inválidas (mismas reglas que el servidor), las que pasaron el tope de 2.000 o un lote que el servidor rechazó con 400 (el motivo queda en pantalla y en la consola) |
+| Última precisión y última posición | lo último que dio el GPS |
+| Pasó a segundo plano | cuántas veces la página dejó de estar a la vista (pantalla bloqueada, otra app encima, cambio de pestaña) |
+| Reanudaciones | cuántas veces la página se recargó mientras rastreaba y retomó sola (por ejemplo, si el sistema la descartó en segundo plano) |
+| Errores de GPS | veces que el GPS no pudo dar la ubicación |
+
+Cada posición se manda con `visible` (si la página estaba a la vista al capturarla). "Mantener pantalla encendida" usa Screen Wake Lock y solo aparece si el navegador lo soporta.
+
+Al tocar "Empezar", los contadores vuelven a cero. Las pendientes de antes no se borran: se siguen enviando.
+
+**Mapa (prueba)**, en la compu del admin:
+
+- Un punto por cadete con su nombre y la hora de la última posición, el círculo de precisión y la línea del recorrido de las últimas 2 h.
+- Se actualiza solo (stream SSE). Si se corta, arriba aparece "Reconectando…" y al volver se piden de nuevo las últimas posiciones y los recorridos, así no se pierde nada. Railway corta el stream cada 15 minutos: es normal que el aviso aparezca unos segundos.
+- Al tocar un cadete en la lista (o su punto), el panel muestra la última posición, la demora (`recibida_en − capturada_en`), la precisión, el origen y si estaba visible. Abajo está el formulario **Resumen de una prueba**: con desde y hasta (hora de la compu, con segundos) muestra el resumen de `/api/posiciones/resumen` y un link al JSON crudo.
+
+### Antes de mergear, en la compu
+
+1. Levantá el servidor local. Abrí dos ventanas de Chrome (una de ellas de incógnito, para tener dos sesiones): una como cadete en "Rastreo (prueba)" y otra como admin en "Mapa (prueba)".
+2. En la ventana del cadete: DevTools → menú de tres puntos → More tools → Sensors → Location. Elegí una ciudad o cargá coordenadas a mano y tocá "Empezar". Aceptá el permiso de ubicación.
+3. Cambiá las coordenadas varias veces. El punto tiene que moverse en el mapa del admin (a lo sumo 10 s después, que es cada cuánto se envía) y dejar la línea del recorrido.
+4. Apagá el servidor, cambiá las coordenadas un par de veces y volvé a prenderlo. "Pendientes en cola" sube mientras está apagado y vuelve a 0 solo. En el mapa, los puntos llegan con su hora original (la demora de esas posiciones es de varios segundos).
+
+Lo mismo, automático, con `scripts/verificar-gps.mjs` (ver abajo).
+
+### Después de mergear, con los celulares
+
+1. Esperá el deploy en Railway.
+2. En la compu, entrá como admin y abrí "Mapa (prueba)". Dejalo abierto toda la sesión de pruebas: a los 15 minutos Railway corta el stream y el mapa se tiene que reconectar solo en unos segundos, sin recargar y sin perder posiciones.
+3. En el iPhone (la PWA agregada desde Safari) y en el Samsung, entrá como cadete, abrí "Rastreo (prueba)" y tocá "Empezar". Aceptá el permiso de ubicación. Si se negó, la pantalla explica cómo habilitarlo.
+4. Para cada fila de la tabla:
+   1. Anotá la hora de inicio (la que muestra el celular, con segundos) y la batería.
+   2. Tocá "Empezar" (pone los contadores en cero) y hacé la prueba durante el tiempo de la fila:
+      - **App abierta:** la pantalla de rastreo a la vista todo el tiempo. Sirve de referencia. Podés activar "Mantener pantalla encendida".
+      - **Pantalla bloqueada:** tocá "Empezar" y bloqueá el celular.
+      - **WhatsApp encima:** tocá "Empezar" y abrí WhatsApp (o cualquier otra app) sin cerrar la PWA.
+      - **Ahorro de batería (Samsung):** activá el ahorro de batería antes de empezar y bloqueá la pantalla.
+      - **Modo avión 5 min en medio:** con la app abierta, a mitad de la prueba poné modo avión 5 minutos y sacalo. Las posiciones de esos minutos tienen que aparecer después, con demora alta; si no aparecen, el GPS no dio posiciones sin red.
+      - **1 h rastreando:** la app abierta (o como se vaya a usar de verdad) durante una hora, para medir la batería.
+   3. Al terminar, volvé a la app, mirá "Pendientes en cola" y esperá a que llegue a 0. Anotá la hora de fin, la batería y los contadores de "Pasó a segundo plano" y "Reanudaciones".
+   4. En el mapa, elegí el cadete, cargá desde y hasta, y tocá "Ver resumen". Pasá los números a la tabla.
+5. Los huecos de más de 60 s, las posiciones con `visible = false` (columna "No visibles") o la falta de posiciones con la app en segundo plano son lo que responde la pregunta. Si en segundo plano no llega nada, el resumen va a mostrar un hueco del largo de la prueba y 0 no visibles.
+
+### Verificación automática con Chrome headless
+
+`scripts/verificar-gps.mjs` hace los pasos de "Antes de mergear" solo, con Chrome sin ventana: simula la ubicación, comprueba que el mapa sigue al cadete, corta la red del cadete y mira que la cola se vacíe al volver con las horas originales, recarga la página del cadete mientras rastrea, compara el resumen del panel con la API y revisa que nada se pida a un CDN. No instala nada: usa Node 22 y el Chrome de la compu.
+
+```sh
+VERIF_URL=http://localhost:8080 ADMIN_PASS=… CADETE_USER=… CADETE_PASS=… node scripts/verificar-gps.mjs
+```
+
+- `--servidor-apagado`: en vez de cortar la red del cadete, pide apagar y prender el servidor de verdad (espera un Enter en cada paso). Además comprueba que el mapa muestre "Reconectando…".
+- `--ver`: abre Chrome con ventana, para mirar lo que hace.
+- `CHROME=…` si el ejecutable no se llama `google-chrome`.
+
+Deja posiciones del cadete en la base: usalo contra la base local, no contra Railway.
+
 ## API de posiciones
 
 Todas las rutas piden sesión (cookie `cadetes_sesion`). Sin sesión responden **401**; con el rol equivocado, **403**. Los errores vienen como `{"error": "mensaje"}`, en castellano y listos para mostrar.
