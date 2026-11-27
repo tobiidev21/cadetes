@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mapa (prueba) · Cadetes</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#1d4ed8">
+  <!-- Leaflet va en el binario (web/static/vendor/leaflet), sin CDN. -->
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; }
+    header { display: flex; gap: 1rem; align-items: baseline; padding: 0.4rem 1rem; border-bottom: 1px solid #ddd; }
+    header h1 { font-size: 1.2rem; margin: 0; }
+    main { flex: 1; display: flex; min-height: 0; }
+    #mapa-contenedor { flex: 1; position: relative; min-height: 0; }
+    #mapa { position: absolute; inset: 0; }
+    #conexion {
+      position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); z-index: 1000;
+      background: #fef3c7; border: 1px solid #f59e0b; border-radius: 1rem; padding: 0.2rem 0.8rem; font-size: 0.85rem;
+    }
+    #panel { width: 22rem; overflow-y: auto; padding: 0 1rem 1rem; border-left: 1px solid #ddd; box-sizing: border-box; }
+    #lista-cadetes { list-style: none; padding: 0; }
+    #lista-cadetes button { width: 100%; text-align: left; padding: 0.4rem; background: none; border: 1px solid transparent; cursor: pointer; font: inherit; }
+    #lista-cadetes button[aria-pressed="true"] { border-color: #1d4ed8; background: #eff6ff; }
+    .color { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; font-size: 0.95rem; }
+    dt { font-weight: 600; }
+    dd { margin: 0; }
+    form p { margin: 0.4rem 0; }
+    .error { color: #b91c1c; }
+    .aviso { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.5rem 0.75rem; margin: 1rem; }
+    .etiqueta-cadete { font-weight: 600; }
+    @media (max-width: 700px) {
+      main { flex-direction: column; }
+      #mapa-contenedor { flex: none; height: 60vh; }
+      #panel { width: auto; border-left: none; border-top: 1px solid #ddd; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← Volver</a>
+    <h1>Mapa (prueba)</h1>
+  </header>
+
+  <p id="acceso" class="aviso" hidden></p>
+
+  <main id="pantalla" hidden>
+    <div id="mapa-contenedor">
+      <div id="mapa"></div>
+      <div id="conexion" role="status" hidden>Reconectando…</div>
+    </div>
+
+    <aside id="panel">
+      <h2>Cadetes</h2>
+      <p id="sin-cadetes">Todavía no hay posiciones.</p>
+      <ul id="lista-cadetes"></ul>
+      <p id="error-mapa" class="error" role="alert"></p>
+
+      <section id="detalle-cadete" hidden>
+        <h2 id="nombre-cadete"></h2>
+        <dl>
+          <dt>Última posición</dt><dd id="d-ultima"></dd>
+          <dt>Demora de la última</dt><dd id="d-demora"></dd>
+          <dt>Precisión</dt><dd id="d-precision"></dd>
+          <dt>Coordenadas</dt><dd id="d-coordenadas"></dd>
+          <dt>Origen</dt><dd id="d-origen"></dd>
+          <dt>Visible</dt><dd id="d-visible"></dd>
+          <dt>En el recorrido (2 h)</dt><dd id="d-recorrido"></dd>
+        </dl>
+
+        <h3>Resumen de una prueba</h3>
+        <form id="form-resumen">
+          <p><label>Desde<br><input name="desde" type="datetime-local" step="1" required></label></p>
+          <p><label>Hasta<br><input name="hasta" type="datetime-local" step="1" required></label></p>
+          <p><button type="submit">Ver resumen</button></p>
+        </form>
+        <p id="error-resumen" class="error" role="alert"></p>
+        <dl id="resumen" hidden>
+          <dt>Posiciones</dt><dd id="r-posiciones"></dd>
+          <dt>Primera</dt><dd id="r-primera"></dd>
+          <dt>Última</dt><dd id="r-ultima"></dd>
+          <dt>Intervalo medio</dt><dd id="r-intervalo"></dd>
+          <dt>Huecos &gt; 60 s</dt><dd id="r-huecos"></dd>
+          <dt>Demora media</dt><dd id="r-demora-media"></dd>
+          <dt>Demora máxima</dt><dd id="r-demora-max"></dd>
+          <dt>Precisión media</dt><dd id="r-precision"></dd>
+          <dt>No visibles</dt><dd id="r-no-visibles"></dd>
+        </dl>
+        <p id="r-json" hidden><a id="r-json-link" target="_blank" rel="noopener">Ver el JSON de /api/posiciones/resumen</a></p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="/js/mapa.js"></script>
+</body>
+</html>
