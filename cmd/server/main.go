@@ -20,6 +20,7 @@ import (
 	"github.com/tobiidev21/cadetes/internal/auth"
 	"github.com/tobiidev21/cadetes/internal/db"
 	"github.com/tobiidev21/cadetes/internal/orders"
+	"github.com/tobiidev21/cadetes/internal/positions"
 	"github.com/tobiidev21/cadetes/internal/push"
 	"github.com/tobiidev21/cadetes/web"
 )
@@ -77,15 +78,21 @@ func run() error {
 
 	pushSvc := push.NewService(queries, push.NewWebPushSender(pushCfg, nil), pushCfg.PublicKey)
 	ordersSvc := orders.NewService(queries, pushSvc)
+	broker := positions.NewBroker()
+	positionsH := positions.NewHandler(positions.NewService(queries, broker))
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           routes(pool, auth.NewHandler(authSvc), orders.NewHandler(ordersSvc), push.NewHandler(pushSvc)),
+		Handler:           routes(pool, auth.NewHandler(authSvc), orders.NewHandler(ordersSvc), push.NewHandler(pushSvc), positionsH),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	// Los streams de posiciones no terminan solos: al apagar se cierran para
+	// que Shutdown no tenga que esperar el timeout.
+	srv.RegisterOnShutdown(broker.Close)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -132,7 +139,7 @@ func connect(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 // migrate aplica las migraciones de goose embebidas en el binario.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
 	if err != nil {
@@ -155,7 +162,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pushH *push.Handler) http.Handler {
+func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pushH *push.Handler, positionsH *positions.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -169,10 +176,11 @@ func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pu
 			http.Error(w, "db no disponible", http.StatusServiceUnavailable)
 			return
 		}
-		fmt.Fprint(w, "ok")
+		_, _ = fmt.Fprint(w, "ok")
 	})
 
 	admin := authH.RequireRole(auth.RoleAdmin)
+	cadete := authH.RequireRole(auth.RoleCadete)
 
 	mux.HandleFunc("POST /api/login", authH.Login)
 	mux.HandleFunc("POST /api/logout", authH.Logout)
@@ -184,7 +192,12 @@ func routes(pool *pgxpool.Pool, authH *auth.Handler, ordersH *orders.Handler, pu
 	mux.Handle("POST /api/pedidos", admin(http.HandlerFunc(ordersH.Create)))
 	mux.Handle("GET /api/pedidos/{id}", authH.RequireLogin(http.HandlerFunc(ordersH.Get)))
 	mux.Handle("GET /api/push/clave", authH.RequireLogin(http.HandlerFunc(pushH.PublicKey)))
-	mux.Handle("POST /api/push/suscripciones", authH.RequireRole(auth.RoleCadete)(http.HandlerFunc(pushH.Subscribe)))
+	mux.Handle("POST /api/push/suscripciones", cadete(http.HandlerFunc(pushH.Subscribe)))
+	mux.Handle("POST /api/posiciones", cadete(http.HandlerFunc(positionsH.Create)))
+	mux.Handle("GET /api/posiciones/stream", admin(http.HandlerFunc(positionsH.Stream)))
+	mux.Handle("GET /api/posiciones/ultimas", admin(http.HandlerFunc(positionsH.Latest)))
+	mux.Handle("GET /api/posiciones/recorrido", admin(http.HandlerFunc(positionsH.Track)))
+	mux.Handle("GET /api/posiciones/resumen", admin(http.HandlerFunc(positionsH.Summary)))
 
 	// La notificación abre /pedidos/{id}: es la misma página, que lee la ruta.
 	mux.HandleFunc("GET /pedidos/{id}", func(w http.ResponseWriter, r *http.Request) {
